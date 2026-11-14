@@ -1,0 +1,1014 @@
+"""Guarded DCP Set and Reset transactions.
+
+Every state-changing request passes through the same sequence:
+
+1. explicit configuration mode and per-operation confirmation (``SafetyGate``);
+2. a fresh unicast Identify to revalidate the selected target immediately
+   before transmission;
+3. exactly one unicast Set request, with no automatic retry;
+4. correlation by FrameID, ServiceID, Xid, source MAC and destination MAC;
+5. for Name/IP, one independent read-back Get (no retry);
+6. for reset, an optional user-triggered post-check by unicast Identify.
+
+An acknowledgement is never reported as proof that a change persisted or that a
+reset completed. A timeout is reported as outcome unknown, not failure.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from ..codec import (
+    build_factory_reset_legacy_request,
+    build_reset_to_factory_request,
+    build_set_ip_request,
+    build_set_name_request,
+    classify_set_response,
+    new_xid,
+    parse_frame,
+    parse_mac,
+    request_qualifier,
+)
+from ..constants import (
+    DEFAULT_MIN_REQUEST_INTERVAL_S,
+    SUPPORTED_RESET_MODES,
+    ControlSubOption,
+    DeviceSubOption,
+    FrameId,
+    IpSubOption,
+    Option,
+    ServiceId,
+    ServiceType,
+)
+from ..model import (
+    DcpFrame,
+    DeviceIdentity,
+    TransactionRecord,
+    WriteResult,
+    utc_now,
+)
+from ..safety import ConfirmationRequest, SafetyError, SafetyGate
+from ..transport.base import DcpTransport, TransportError
+from ..validation import validate_ip_suite, validate_station_name
+from .discovery import LATE_RESPONSE_GRACE_S, DiscoveryConfig, DiscoveryService
+from .get import GetConfig, GetService
+from .rate_limit import RequestRateLimiter
+
+EventLog = Callable[[str, str, dict], None]
+
+
+@dataclass(frozen=True, slots=True)
+class WriteAuthorization:
+    """Operator confirmations collected by the UI or a test harness."""
+
+    authorization_confirmed: bool = False
+    safe_maintenance_confirmed: bool = False
+
+
+@dataclass(slots=True)
+class WriteConfig:
+    timeout_s: float = 2.0
+    revalidate_timeout_s: float = 2.0
+    verify_timeout_s: float = 2.0
+    vlan_id: int | None = None
+    min_request_interval_s: float = DEFAULT_MIN_REQUEST_INTERVAL_S
+    verify_after_set: bool = True
+
+
+@dataclass(slots=True)
+class WriteRequest:
+    kind: str  # set_name | set_ip | reset | reset_legacy
+    target_mac: str
+    confirmation: ConfirmationRequest
+    authorization: WriteAuthorization
+    config: WriteConfig = field(default_factory=WriteConfig)
+    name: str | None = None
+    ip_address: str | None = None
+    subnet_mask: str | None = None
+    gateway: str | None = None
+    permanent: bool = True
+    reset_mode: int | None = None
+
+
+@dataclass(slots=True)
+class _PendingWrite:
+    xid: int
+    target_mac: str
+    expected_option: int
+    expected_suboption: int
+    deadline_monotonic: float
+    request_monotonic: float
+    request_tx_utc: datetime
+    response: DcpFrame | None = None
+    response_timestamp: datetime | None = None
+    rtt_ms: float | None = None
+    late: bool = False
+    duplicate_responses: int = 0
+    unmatched_responses: int = 0
+    transactions: list[TransactionRecord] = field(default_factory=list)
+    response_event: threading.Event = field(default_factory=threading.Event)
+
+
+def identity_text(device: DeviceIdentity) -> str:
+    """Stable target-identity text used for revalidation."""
+    name = device.name_of_station if device.name_of_station else "<not set>"
+    return (
+        f"{device.mac} | {name} | {device.ip_text} | {device.vendor_device_text}"
+    )
+
+
+class WriteService:
+    """One-shot, guarded Set dispatcher.
+
+    Register :meth:`process_frame` with the same frame router used by discovery
+    and Get. Only one write may be pending at a time.
+    """
+
+    def __init__(
+        self,
+        transport: DcpTransport,
+        *,
+        discovery_service: DiscoveryService,
+        get_service: GetService,
+        safety: SafetyGate | None = None,
+        limiter: RequestRateLimiter | None = None,
+        event_log: EventLog | None = None,
+    ) -> None:
+        self.transport = transport
+        self.discovery_service = discovery_service
+        self.get_service = get_service
+        self.safety = safety or SafetyGate()
+        self.limiter = limiter or RequestRateLimiter()
+        self.event_log = event_log
+        self._lock = threading.Lock()
+        self._pending: _PendingWrite | None = None
+
+    @property
+    def has_pending(self) -> bool:
+        with self._lock:
+            return self._pending is not None
+
+    def _log(self, event: str, message: str, detail: dict | None = None) -> None:
+        if self.event_log is not None:
+            try:
+                self.event_log(event, message, detail or {})
+            except Exception:
+                pass
+
+    @staticmethod
+    def _record(pending: _PendingWrite, **kwargs) -> None:
+        pending.transactions.append(TransactionRecord(**kwargs))
+
+    # ------------------------------------------------------------- callbacks
+    def process_frame(self, raw: bytes, timestamp: datetime, direction: str) -> None:
+        if direction != "rx":
+            return
+        with self._lock:
+            pending = self._pending
+            if pending is None:
+                return
+            xid = pending.xid
+            target = pending.target_mac
+
+        frame = parse_frame(
+            raw, captured_at=timestamp, interface_id=self.transport.interface.id
+        )
+        if (
+            frame.kind != "dcp"
+            or frame.frame_id != int(FrameId.GET_SET)
+            or frame.service_id != int(ServiceId.SET)
+            or frame.service_type
+            not in (
+                int(ServiceType.RESPONSE_SUCCESS),
+                int(ServiceType.RESPONSE_NOT_SUPPORTED),
+            )
+        ):
+            return
+
+        local_mac = (self.transport.interface.mac or "").lower()
+        if local_mac and frame.dst_mac and frame.dst_mac.lower() not in (
+            local_mac,
+            "ff:ff:ff:ff:ff:ff",
+        ):
+            with self._lock:
+                pending = self._pending
+                if pending is not None and frame.xid == pending.xid:
+                    pending.unmatched_responses += 1
+                    self._record(
+                        pending,
+                        timestamp=timestamp,
+                        event="set_response",
+                        interface_id=self.transport.interface.id,
+                        outcome="unrelated_response_ignored",
+                        detail=f"Set response destination {frame.dst_mac} is not this interface",
+                        xid=frame.xid,
+                        service="Set",
+                        peer_mac=frame.src_mac,
+                        frame_id=frame.frame_id,
+                        raw_hex=frame.raw.hex(),
+                    )
+            return
+
+        with self._lock:
+            pending = self._pending
+            if pending is None:
+                return
+            if frame.xid != xid:
+                pending.unmatched_responses += 1
+                self._record(
+                    pending,
+                    timestamp=timestamp,
+                    event="set_response",
+                    interface_id=self.transport.interface.id,
+                    outcome="unrelated_response_ignored",
+                    detail=f"Set response Xid 0x{(frame.xid or 0):08x} does not match request",
+                    xid=frame.xid,
+                    service="Set",
+                    peer_mac=frame.src_mac,
+                    frame_id=frame.frame_id,
+                    raw_hex=frame.raw.hex(),
+                )
+                return
+            if (frame.src_mac or "").lower() != target.lower():
+                pending.unmatched_responses += 1
+                self._record(
+                    pending,
+                    timestamp=timestamp,
+                    event="set_response",
+                    interface_id=self.transport.interface.id,
+                    outcome="unrelated_response_ignored",
+                    detail=f"Set target was {target}, response came from {frame.src_mac}",
+                    xid=xid,
+                    service="Set",
+                    peer_mac=frame.src_mac,
+                    frame_id=frame.frame_id,
+                    raw_hex=frame.raw.hex(),
+                )
+                return
+            if pending.response is not None:
+                pending.duplicate_responses += 1
+                self._record(
+                    pending,
+                    timestamp=timestamp,
+                    event="set_response",
+                    interface_id=self.transport.interface.id,
+                    outcome="duplicate_response_ignored",
+                    detail="A Set response was already received for this Xid",
+                    xid=xid,
+                    service="Set",
+                    peer_mac=frame.src_mac,
+                    frame_id=frame.frame_id,
+                    raw_hex=frame.raw.hex(),
+                )
+                return
+
+            # Control/Response carries the involved option/sub-option. If both
+            # are present and do not match the single block we sent, this is not
+            # our operation even if the Xid collides.
+            for block in frame.blocks:
+                if (
+                    block.option == int(Option.CONTROL)
+                    and block.suboption == int(ControlSubOption.RESPONSE)
+                    and block.error_option is not None
+                    and block.error_suboption is not None
+                    and (
+                        block.error_option != pending.expected_option
+                        or block.error_suboption != pending.expected_suboption
+                    )
+                ):
+                    pending.unmatched_responses += 1
+                    self._record(
+                        pending,
+                        timestamp=timestamp,
+                        event="set_response",
+                        interface_id=self.transport.interface.id,
+                        outcome="unrelated_response_ignored",
+                        detail=(
+                            "Set response refers to option/sub-option "
+                            f"0x{block.error_option:02x}/0x{block.error_suboption:02x}, "
+                            "not the requested block"
+                        ),
+                        xid=xid,
+                        service="Set",
+                        peer_mac=frame.src_mac,
+                        frame_id=frame.frame_id,
+                        raw_hex=frame.raw.hex(),
+                    )
+                    return
+
+            rtt_ms = max(0.0, (time.monotonic() - pending.request_monotonic) * 1000.0)
+            late = time.monotonic() > pending.deadline_monotonic
+            pending.response = frame
+            pending.response_timestamp = timestamp
+            pending.rtt_ms = round(rtt_ms, 3)
+            pending.late = late
+            verdict, error, text = classify_set_response(frame)
+            self._record(
+                pending,
+                timestamp=timestamp,
+                event="set_response",
+                interface_id=self.transport.interface.id,
+                outcome="late_response" if late else f"matching_response_received:{verdict}",
+                detail=f"{verdict}: {text}",
+                xid=xid,
+                service="Set",
+                peer_mac=frame.src_mac,
+                frame_id=frame.frame_id,
+                rtt_ms=round(rtt_ms, 3),
+                raw_hex=frame.raw.hex(),
+            )
+            pending.response_event.set()
+
+    # -------------------------------------------------------------- execute
+    def execute(
+        self,
+        request: WriteRequest,
+        *,
+        cancel_event: threading.Event | None = None,
+        progress: Callable[[str], None] | None = None,
+    ) -> WriteResult:
+        cancel_event = cancel_event or threading.Event()
+        xid = new_xid()
+        operation_text, option, suboption = _operation_shape(request)
+        result = self._new_result(request, xid=xid, operation_text=operation_text)
+
+        if not self._preflight(request, result):
+            return result
+        if not self._revalidate(request, result, cancel_event, progress):
+            return result
+
+        pending = self._transmit_once(
+            request,
+            result,
+            xid=xid,
+            option=option,
+            suboption=suboption,
+            cancel_event=cancel_event,
+            progress=progress,
+        )
+        if pending is None:
+            return result
+
+        response, cancelled_before_response = self._await_response(
+            pending, result, cancel_event, progress
+        )
+        if response is None:
+            return self._finish_without_response(result, request, cancelled_before_response)
+
+        self._classify_response(result, response)
+        if result.state == "acknowledged" and not cancelled_before_response:
+            if request.kind in ("set_name", "set_ip"):
+                self._execute_set(
+                    result, request, cancel_event=cancel_event, progress=progress
+                )
+            else:
+                self._execute_reset(result)
+
+        result.finished_at = utc_now()
+        result.transactions.sort(key=lambda record: record.timestamp)
+        self._log(
+            "write.finished",
+            result.outcome_text,
+            {
+                "xid": xid,
+                "kind": request.kind,
+                "target": request.target_mac,
+                "state": result.state,
+                "verification": result.verification,
+            },
+        )
+        return result
+
+    # ------------------------------------------------------- execute phases
+    def _new_result(
+        self, request: WriteRequest, *, xid: int, operation_text: str
+    ) -> WriteResult:
+        cfg = request.config
+        started = utc_now()
+        return WriteResult(
+            interface_id=self.transport.interface.id,
+            xid=xid,
+            target_mac=request.target_mac,
+            operation=request.kind,
+            operation_text=operation_text,
+            parameters=dict(request.confirmation.proposed_parameters),
+            started_at=started,
+            finished_at=started,
+            timeout_s=cfg.timeout_s,
+            vlan_id=cfg.vlan_id,
+            permanent=request.permanent if request.kind in ("set_name", "set_ip") else None,
+            block_qualifier=_request_qualifier(request),
+            reset_mode=request.reset_mode if request.kind == "reset" else None,
+        )
+
+    def _preflight(self, request: WriteRequest, result: WriteResult) -> bool:
+        """Validation, confirmation and capture preconditions. No frame is sent."""
+        try:
+            self._validate_request(request)
+            self._confirm(request)
+        except (SafetyError, ValueError) as exc:
+            result.state = "blocked"
+            result.error = str(exc)
+            result.finished_at = utc_now()
+            result.warnings.append("No frame was transmitted.")
+            self._log(
+                "write.blocked",
+                str(exc),
+                {"target": request.target_mac, "kind": request.kind},
+            )
+            return False
+
+        if not self.transport.is_capturing:
+            result.state = "blocked"
+            result.error = "Passive capture is not running"
+            result.finished_at = utc_now()
+            result.warnings.append("No frame was transmitted.")
+            return False
+        if not self.transport.interface.mac:
+            result.state = "blocked"
+            result.error = "Selected interface has no MAC address"
+            result.finished_at = utc_now()
+            result.warnings.append("No frame was transmitted.")
+            return False
+        return True
+
+    def _revalidate(
+        self,
+        request: WriteRequest,
+        result: WriteResult,
+        cancel_event: threading.Event,
+        progress: Callable[[str], None] | None,
+    ) -> bool:
+        """Step 1: fresh unicast Identify revalidation immediately before Set."""
+        cfg = request.config
+        if progress:
+            progress("Revalidating target with one read-only unicast Identify…")
+        try:
+            revalidation = self.discovery_service.discover(
+                DiscoveryConfig(
+                    timeout_s=cfg.revalidate_timeout_s,
+                    vlan_id=cfg.vlan_id,
+                    unicast_mac=request.target_mac,
+                    min_request_interval_s=cfg.min_request_interval_s,
+                ),
+                cancel_event=cancel_event,
+            )
+        except Exception as exc:
+            result.state = "target_unverified"
+            result.error = f"Target revalidation failed: {type(exc).__name__}: {exc}"
+            result.finished_at = utc_now()
+            result.warnings.append("No state-changing frame was transmitted.")
+            return False
+        result.transactions.extend(revalidation.transactions)
+
+        if revalidation.cancelled:
+            result.state = "cancelled"
+            result.cancelled = True
+            result.finished_at = utc_now()
+            result.warnings.append(
+                "Cancelled during target revalidation; no Set frame was sent."
+            )
+            return False
+
+        target = next(
+            (
+                device
+                for device in revalidation.devices
+                if device.mac.lower() == request.target_mac.lower()
+            ),
+            None,
+        )
+        if target is None:
+            result.state = "target_unverified"
+            result.error = (
+                "The selected target did not answer a fresh unicast Identify. "
+                "No Set/Reset frame was transmitted."
+            )
+            result.finished_at = utc_now()
+            result.warnings.extend(revalidation.warnings)
+            return False
+        result.before_identity = target
+        try:
+            self.safety.revalidate_target(
+                request.confirmation,
+                live_mac=target.mac,
+                live_identity=identity_text(target),
+            )
+        except SafetyError as exc:
+            result.state = "target_unverified"
+            result.error = str(exc)
+            result.finished_at = utc_now()
+            result.warnings.append("No state-changing frame was transmitted.")
+            return False
+        return True
+
+    def _transmit_once(
+        self,
+        request: WriteRequest,
+        result: WriteResult,
+        *,
+        xid: int,
+        option: int,
+        suboption: int,
+        cancel_event: threading.Event,
+        progress: Callable[[str], None] | None,
+    ) -> _PendingWrite | None:
+        """Step 2: encode, pace and send exactly one frame. No retry."""
+        cfg = request.config
+        try:
+            raw_request = self._build(request, xid)
+            result.request_frame_hex = raw_request.hex()
+        except Exception as exc:
+            result.state = "blocked"
+            result.error = f"Could not encode the request: {exc}"
+            result.finished_at = utc_now()
+            result.warnings.append("No frame was transmitted.")
+            return None
+
+        if progress:
+            progress(f"Waiting for request pacing ({self.limiter.remaining_s():.1f} s)…")
+        if not self.limiter.wait(cancel_event):
+            result.state = "cancelled"
+            result.cancelled = True
+            result.finished_at = utc_now()
+            result.warnings.append(
+                "Cancelled before the state-changing frame was transmitted."
+            )
+            return None
+
+        pending = _PendingWrite(
+            xid=xid,
+            target_mac=request.target_mac,
+            expected_option=option,
+            expected_suboption=suboption,
+            deadline_monotonic=time.monotonic() + float(cfg.timeout_s),
+            request_monotonic=time.monotonic(),
+            request_tx_utc=utc_now(),
+        )
+        with self._lock:
+            if self._pending is not None:
+                result.state = "error"
+                result.error = "Another state-changing transaction is already pending"
+                result.finished_at = utc_now()
+                return None
+            self._pending = pending
+
+        try:
+            self.transport.send_frame(raw_request)
+        except Exception as exc:
+            with self._lock:
+                self._pending = None
+            result.state = "error"
+            result.error = (
+                str(exc) if isinstance(exc, TransportError) else f"Transmission failed: {exc}"
+            )
+            result.finished_at = utc_now()
+            result.warnings.append("No frame is reported as transmitted.")
+            return None
+
+        result.transmitted = True
+        self.limiter.note_sent()
+        with self._lock:
+            self._record(
+                pending,
+                timestamp=pending.request_tx_utc,
+                event="set_request",
+                interface_id=self.transport.interface.id,
+                outcome="transmitted",
+                detail=(
+                    f"{result.operation_text}; "
+                    f"qualifier 0x{_request_qualifier(request):04x}; "
+                    f"timeout {cfg.timeout_s:.1f} s; no retry"
+                ),
+                xid=xid,
+                service="Set",
+                peer_mac=request.target_mac,
+                frame_id=int(FrameId.GET_SET),
+                raw_hex=raw_request.hex(),
+            )
+        self._log(
+            "write.request_transmitted",
+            f"{result.operation_text} transmitted (Xid 0x{xid:08x})",
+            {
+                "xid": xid,
+                "target": request.target_mac,
+                "kind": request.kind,
+                "request_hex": raw_request.hex(),
+            },
+        )
+        return pending
+
+    def _await_response(
+        self,
+        pending: _PendingWrite,
+        result: WriteResult,
+        cancel_event: threading.Event,
+        progress: Callable[[str], None] | None,
+    ) -> tuple[DcpFrame | None, bool]:
+        """Step 3: bounded wait for the first matching response. No retry."""
+        last_progress = 0.0
+        while True:
+            if cancel_event.is_set():
+                break
+            remaining = pending.deadline_monotonic - time.monotonic()
+            if remaining <= -LATE_RESPONSE_GRACE_S:
+                break
+            if pending.response_event.wait(
+                min(0.05, max(0.0, remaining) if remaining > 0 else 0.02)
+            ):
+                break
+            if progress and remaining > 0 and (time.monotonic() - last_progress) > 0.25:
+                last_progress = time.monotonic()
+                progress(f"Waiting for Set response… {remaining:.1f} s remaining")
+
+        cancelled_before_response = cancel_event.is_set() and pending.response is None
+        with self._lock:
+            self._pending = None
+            response = pending.response
+            late = pending.late
+            rtt_ms = pending.rtt_ms
+            transactions = list(pending.transactions)
+            unmatched = pending.unmatched_responses
+            duplicates = pending.duplicate_responses
+        result.transactions.extend(transactions)
+        result.finished_at = utc_now()
+        result.unmatched_responses = unmatched
+        result.duplicate_responses = duplicates
+        result.rtt_ms = rtt_ms
+        result.late = late
+        return response, cancelled_before_response
+
+    def _finish_without_response(
+        self,
+        result: WriteResult,
+        request: WriteRequest,
+        cancelled_before_response: bool,
+    ) -> WriteResult:
+        if cancelled_before_response:
+            result.state = "cancelled"
+            result.cancelled = True
+            result.warnings.append(
+                "Cancelled while waiting. The Set/Reset frame had already been transmitted; "
+                "cancellation does not undo it, and the outcome is unknown. Do not assume "
+                "success or failure."
+            )
+            result.transactions.append(
+                TransactionRecord(
+                    timestamp=result.finished_at,
+                    event="set_cancelled",
+                    interface_id=self.transport.interface.id,
+                    outcome="outcome_unknown",
+                    detail="Cancelled after transmission; no matching response observed",
+                    xid=result.xid,
+                    service="Set",
+                    peer_mac=request.target_mac,
+                    frame_id=int(FrameId.GET_SET),
+                )
+            )
+        else:
+            result.state = "no_response"
+            result.warnings.append(
+                "No matching Set response was observed. This is outcome unknown, not "
+                "proof that the device rejected or failed to apply the operation. "
+                "No automatic retry was performed."
+            )
+            result.transactions.append(
+                TransactionRecord(
+                    timestamp=result.finished_at,
+                    event="set_timeout",
+                    interface_id=self.transport.interface.id,
+                    outcome="outcome_unknown",
+                    detail="No matching Set response within the configured window",
+                    xid=result.xid,
+                    service="Set",
+                    peer_mac=request.target_mac,
+                    frame_id=int(FrameId.GET_SET),
+                )
+            )
+        result.transactions.sort(key=lambda record: record.timestamp)
+        self._log("write.finished", result.outcome_text, result.to_dict())
+        return result
+
+    def _classify_response(self, result: WriteResult, response: DcpFrame) -> None:
+        result.response_frame_hex = response.raw.hex()
+        verdict, error, text = classify_set_response(response)
+        result.response_verdict = verdict
+        result.block_error = error
+        if result.late:
+            result.state = "late_response"
+            result.warnings.append("The Set response arrived after the configured timeout.")
+        elif verdict == "acknowledged":
+            result.state = "acknowledged"
+        elif verdict == "rejected":
+            result.state = "rejected"
+        elif verdict == "service_not_supported":
+            result.state = "service_not_supported"
+        else:
+            result.state = "error"
+            result.error = text
+
+    def _execute_set(
+        self,
+        result: WriteResult,
+        request: WriteRequest,
+        *,
+        cancel_event: threading.Event,
+        progress: Callable[[str], None] | None,
+    ) -> None:
+        if request.config.verify_after_set:
+            self._verify_set(
+                result, request, cancel_event=cancel_event, progress=progress
+            )
+            return
+        result.verification = "not_attempted"
+        result.verification_detail = (
+            "Read-back verification was disabled for this operation. "
+            "The acknowledgement is not proof that the value persisted."
+        )
+
+    def _execute_reset(self, result: WriteResult) -> None:
+        result.verification = "not_attempted"
+        result.verification_detail = (
+            "Reset acknowledgement is not proof of completion. Use the read-only "
+            "post-check when the device is reachable."
+        )
+
+    # ------------------------------------------------------------ validation
+    def _validate_request(self, request: WriteRequest) -> None:
+        if request.kind not in ("set_name", "set_ip", "reset", "reset_legacy"):
+            raise ValueError(f"Unsupported write operation {request.kind!r}")
+        if request.confirmation.interface_id != self.transport.interface.id:
+            raise SafetyError("Confirmation interface does not match the active interface.")
+        if request.confirmation.target_mac.strip().lower() != request.target_mac.strip().lower():
+            raise SafetyError("Confirmation target does not match the selected target MAC.")
+        try:
+            target_raw = parse_mac(request.target_mac)
+        except Exception as exc:
+            raise SafetyError(f"Invalid target MAC: {exc}") from exc
+        if target_raw[0] & 1:
+            raise SafetyError(
+                "State-changing requests must target exactly one unicast device MAC."
+            )
+        if request.confirmation.allows_batch or request.confirmation.allows_broadcast:
+            raise SafetyError("Batch and broadcast state changes are forbidden.")
+        if not 0.5 <= float(request.config.timeout_s) <= 60.0:
+            raise ValueError("Set timeout must be 0.5..60 seconds")
+        if not 0.5 <= float(request.config.revalidate_timeout_s) <= 60.0:
+            raise ValueError("Revalidation timeout must be 0.5..60 seconds")
+        if not 0.5 <= float(request.config.verify_timeout_s) <= 60.0:
+            raise ValueError("Read-back timeout must be 0.5..60 seconds")
+        if request.kind == "reset":
+            if request.reset_mode not in SUPPORTED_RESET_MODES:
+                raise ValueError(
+                    "Reset mode is not implemented; supported modes are "
+                    + ", ".join(str(m) for m in sorted(SUPPORTED_RESET_MODES))
+                )
+        elif request.kind == "reset_legacy":
+            # No mode field exists; the qualifier is fixed at 0x0000 ("Default").
+            if request.reset_mode is not None:
+                raise ValueError("A legacy FactoryReset carries no reset mode")
+        elif request.kind == "set_name":
+            if request.name is None:
+                raise ValueError("NameOfStation is required")
+            report = validate_station_name(request.name)
+            if not report.ok:
+                raise ValueError("Invalid NameOfStation: " + "; ".join(report.errors))
+        elif request.kind == "set_ip":
+            if request.ip_address is None or request.subnet_mask is None:
+                raise ValueError("IP address and subnet mask are required")
+            report = validate_ip_suite(
+                request.ip_address,
+                request.subnet_mask,
+                request.gateway or "0.0.0.0",
+            )
+            if not report.ok:
+                raise ValueError("Invalid IPv4 suite: " + "; ".join(report.errors))
+
+    def _confirm(self, request: WriteRequest) -> None:
+        self.safety.confirm(
+            request.confirmation,
+            authorization_confirmed=request.authorization.authorization_confirmed,
+            safe_maintenance_confirmed=request.authorization.safe_maintenance_confirmed,
+        )
+
+    def _build(self, request: WriteRequest, xid: int) -> bytes:
+        src_mac = self.transport.interface.mac or ""
+        if request.kind == "set_name":
+            return build_set_name_request(
+                src_mac,
+                request.target_mac,
+                xid,
+                request.name or "",
+                permanent=request.permanent,
+                vlan_id=request.config.vlan_id,
+            )
+        if request.kind == "set_ip":
+            return build_set_ip_request(
+                src_mac,
+                request.target_mac,
+                xid,
+                request.ip_address or "",
+                request.subnet_mask or "",
+                request.gateway or "0.0.0.0",
+                permanent=request.permanent,
+                vlan_id=request.config.vlan_id,
+            )
+        if request.kind == "reset":
+            return build_reset_to_factory_request(
+                src_mac,
+                request.target_mac,
+                xid,
+                int(request.reset_mode or 0),
+                vlan_id=request.config.vlan_id,
+            )
+        if request.kind == "reset_legacy":
+            return build_factory_reset_legacy_request(
+                src_mac,
+                request.target_mac,
+                xid,
+                vlan_id=request.config.vlan_id,
+            )
+        raise ValueError(f"Unsupported write operation {request.kind!r}")
+
+    # ------------------------------------------------------------- read-back
+    def _verify_set(
+        self,
+        result: WriteResult,
+        request: WriteRequest,
+        *,
+        cancel_event: threading.Event,
+        progress: Callable[[str], None] | None,
+    ) -> None:
+        if progress:
+            progress("Reading back the affected block (one read-only Get, no retry)…")
+        if request.kind == "set_name":
+            selector = (int(Option.DEVICE_PROPERTIES), int(DeviceSubOption.NAME_OF_STATION))
+            expected = (request.name or "").encode("ascii")
+        else:
+            selector = (int(Option.IP), int(IpSubOption.IP_PARAMETER))
+            expected = (
+                ipaddress.IPv4Address(request.ip_address or "0.0.0.0").packed
+                + ipaddress.IPv4Address(request.subnet_mask or "0.0.0.0").packed
+                + ipaddress.IPv4Address(request.gateway or "0.0.0.0").packed
+            )
+
+        get_result = self.get_service.get(
+            request.target_mac,
+            GetConfig(
+                timeout_s=request.config.verify_timeout_s,
+                vlan_id=request.config.vlan_id,
+                selectors=(selector,),
+                min_request_interval_s=request.config.min_request_interval_s,
+            ),
+            cancel_event=cancel_event,
+        )
+        result.transactions.extend(get_result.transactions)
+        result.warnings.extend(
+            warning for warning in get_result.warnings if warning not in result.warnings
+        )
+        if get_result.identity is not None:
+            result.after_identity = get_result.identity
+
+        if get_result.state == "cancelled":
+            result.verification = "unknown"
+            result.verification_detail = "Read-back was cancelled."
+            return
+        if get_result.state == "service_not_supported":
+            result.verification = "service_not_supported"
+            result.verification_detail = "Device reports Get as unsupported."
+            return
+        if get_result.state != "response_received":
+            result.verification = "unknown"
+            result.verification_detail = (
+                f"No matching read-back response ({get_result.outcome_text})."
+            )
+            return
+        if get_result.block_errors:
+            result.verification = "rejected"
+            result.verification_detail = get_result.block_error_text
+            return
+
+        block = next(
+            (
+                item
+                for item in get_result.blocks
+                if (item.option, item.suboption) == selector
+            ),
+            None,
+        )
+        if block is None:
+            result.verification = "unknown"
+            result.verification_detail = "Read-back response contained no matching block."
+            return
+        observed = block.value.rstrip(b"\x00") if request.kind == "set_name" else block.value
+        if observed == expected:
+            result.verification = "verified"
+            if request.kind == "set_name":
+                result.verification_detail = f"Read-back NameOfStation={request.name!r}."
+            else:
+                result.verification_detail = (
+                    f"Read-back {request.ip_address}/{request.subnet_mask} "
+                    f"gw {request.gateway or '0.0.0.0'}."
+                )
+        else:
+            result.verification = "mismatch"
+            if request.kind == "set_name":
+                result.verification_detail = (
+                    "Read-back NameOfStation="
+                    f"{observed.decode('ascii', errors='replace')!r}."
+                )
+            else:
+                result.verification_detail = (
+                    "Read-back IP parameter bytes="
+                    f"{observed.hex()}, expected {expected.hex()}."
+                )
+
+    # ------------------------------------------------------------ post-check
+    def post_check(
+        self,
+        result: WriteResult,
+        *,
+        timeout_s: float = 3.0,
+        cancel_event: threading.Event | None = None,
+        progress: Callable[[str], None] | None = None,
+    ) -> WriteResult:
+        """One read-only unicast Identify after a reset.
+
+        This proves only that the device answered at the same MAC. It does not
+        prove which reset mode the device implemented or what data was erased.
+        """
+        cancel_event = cancel_event or threading.Event()
+        if progress:
+            progress("Post-check: one read-only unicast Identify…")
+        discovery = self.discovery_service.discover(
+            DiscoveryConfig(
+                timeout_s=timeout_s,
+                vlan_id=result.vlan_id,
+                unicast_mac=result.target_mac,
+                min_request_interval_s=DEFAULT_MIN_REQUEST_INTERVAL_S,
+            ),
+            cancel_event=cancel_event,
+        )
+        result.post_check_xid = discovery.xid
+        result.post_checked_at = discovery.finished_at
+        result.transactions.extend(discovery.transactions)
+        result.transactions.sort(key=lambda record: record.timestamp)
+        if discovery.cancelled:
+            result.post_check_state = "cancelled"
+            result.post_check_detail = "Post-check was cancelled by the user."
+            return result
+        target = next(
+            (
+                device
+                for device in discovery.devices
+                if device.mac.lower() == result.target_mac.lower()
+            ),
+            None,
+        )
+        if target is None:
+            result.post_check_state = "no_response"
+            result.post_check_detail = (
+                "No unicast Identify response after the reset. The device may still be "
+                "rebooting; this is outcome unknown and not proof of failure."
+            )
+            return result
+        result.post_check_state = "responded"
+        result.after_identity = target
+        result.post_check_detail = (
+            "Device answered a read-only unicast Identify after the reset. This proves "
+            "reachability only; verify the expected name/IP scope independently."
+        )
+        return result
+
+
+def _operation_shape(request: WriteRequest) -> tuple[str, int, int]:
+    if request.kind == "set_name":
+        return (
+            "Set NameOfStation",
+            int(Option.DEVICE_PROPERTIES),
+            int(DeviceSubOption.NAME_OF_STATION),
+        )
+    if request.kind == "set_ip":
+        return "Set IP parameters", int(Option.IP), int(IpSubOption.IP_PARAMETER)
+    if request.kind == "reset":
+        return "ResetToFactorySettings", int(Option.CONTROL), int(ControlSubOption.RESET_TO_FACTORY)
+    if request.kind == "reset_legacy":
+        return (
+            "Legacy FactoryReset (05/05)",
+            int(Option.CONTROL),
+            int(ControlSubOption.FACTORY_RESET_LEGACY),
+        )
+    raise ValueError(f"Unsupported write operation {request.kind!r}")
+
+
+def _request_qualifier(request: WriteRequest) -> int:
+    return request_qualifier(
+        request.kind,
+        permanent=request.permanent,
+        reset_mode=request.reset_mode,
+    )

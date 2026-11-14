@@ -1,0 +1,43 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Test / tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build artefacts
+dist/
+build/
+
+# Local run artefacts (default report dir is ~/DCP-Studio-Reports)
+reports/
+captures/
+*.log
+
+# Captures: only the synthetic fixtures are tracked
+*.pcap
+!tests/fixtures/*.pcap
+
+# Merge / edit leftovers
+*.orig
+*.rej
+*.bak
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

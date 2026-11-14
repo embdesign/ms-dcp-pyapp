@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dcp-studio"
+version = "0.1.0"
+description = "PROFINET DCP discovery, guarded configuration, verified reset variants, and functional testing (Phases 1-4)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "DCP Studio maintainers" }]
+keywords = ["profinet", "dcp", "industrial-ethernet", "scapy", "pyside6"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: Manufacturing",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Networking :: Monitoring",
+]
+dependencies = [
+  # Verified against the published API docs and local introspection:
+  # sendp(), AsyncSniffer, conf.ifaces, get_if_hwaddr, rdpcap/wrpcap.
+  "scapy==2.8.0",
+  # Qt bindings. The code uses only stable QtCore/QtWidgets APIs.
+  "PySide6>=6.8,<7",
+]
+
+[project.scripts]
+dcp-studio = "dcpstudio.__main__:main"
+dcp-cli = "dcpstudio.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.17",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dcpstudio"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["dist", ".venv"]
+
+[tool.ruff.lint]
+# Explicit selection: pycodestyle errors, pyflakes, import sorting,
+# pyupgrade (Python 3.11 floor) and bugbear. New rules are opt-in by editing
+# this list, so a ruff upgrade cannot silently change the gate.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "BLE"]
+ignore = [
+  # Broad excepts are deliberate at capture, worker and UI boundaries: a
+  # callback must never terminate a sniffer thread or a Qt slot.
+  "BLE001",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+  "default",
+]
+
+[tool.coverage.run]
+source = ["dcpstudio"]
+branch = true
+
+[tool.uv]
+# uv creates .venv and installs both dependency groups by default.
+default-groups = ["dev"]

@@ -1,0 +1,113 @@
+# Protocol support matrix
+
+Status of every DCP capability in this repository. **Phases 1–4 are implemented;
+state-changing operations are guarded.** "Verified" means the wire layout is
+corroborated by p-net and/or Wireshark, not that every device implements it.
+
+Legend:
+
+- **✅ implemented** — available in the GUI/API and tested offline.
+- **🟡 codec only** — encoder/parser and tests exist, not exposed in the current UI.
+- **⛔ disabled** — verified or partially verified, intentionally not sent.
+- **❔ unverified** — sources disagree or device semantics unknown.
+- **➖ out of scope**.
+
+## 1. Transport and discovery
+
+| Capability | Encode | Decode | Send | Status | Notes |
+|---|---|---|---|---|---|
+| Enumerate interfaces | — | — | — | ✅ | Scapy `conf.ifaces`: name, description, MAC, IPv4/IPv6, flags; Linux sysfs link state |
+| Explicit interface selection | — | — | — | ✅ | Single selection; demo/mock row available |
+| EtherType `0x8892` handling | ✅ | ✅ | ✅ | ✅ | FrameID discriminates DCP from PROFINET RT |
+| VLAN tag (802.1Q) | ✅ | ✅ | ✅ | ✅ | One tag; stacked tags warned |
+| Identify-All | ✅ | ✅ | ✅ | ✅ | One request per user action; timeout + ResponseDelayFactor |
+| Unicast Identify | ✅ | ✅ | ✅ | ✅ | Same PDU to selected MAC; device support varies |
+| Identify filter by NameOfStation | ✅ | ✅ | ✅ | ✅ | One `02/02` block with the exact ASCII name, no BlockInfo/Qualifier; optional GUI field; one request per action |
+| Hello | — | ✅ | — | 🟡 | Decoded passively; not emitted |
+| Passive DCP capture | — | ✅ | — | ✅ | All four DCP FrameIDs |
+| Dedupe by (interface, MAC) | — | — | — | ✅ | Partial responses merged |
+| Unknown blocks | — | ✅ | — | ✅ | Preserved, marked unknown, never guessed |
+| Truncated/malformed blocks | — | ✅ | — | ✅ | Warnings, bounded loops, never raises |
+
+## 2. Read and write operations
+
+| Capability | Encode | Decode | Send | Status | Notes |
+|---|---|---|---|---|---|
+| Get one block | ✅ | ✅ | ✅ | ✅ | Read-only; single transaction |
+| Get multiple blocks | ✅ | ✅ | ✅ | ✅ | One transaction; GUI presets and live test |
+| Get IP parameter | ✅ | ✅ | ✅ | ✅ | IP/mask/gateway; BlockInfo bit 0 |
+| Get NameOfStation | ✅ | ✅ | ✅ | ✅ | Trailing NULs trimmed |
+| Get Device ID / role / options | ✅ | ✅ | ✅ | ✅ | Role bits from Wireshark |
+| Get alias / instance / OEM ID | ✅ | ✅ | ✅ | ✅ | Optional blocks; explicit block errors reported |
+| Get MAC block | ✅ | ✅ | ✅ | ✅ | Ethernet source is authoritative |
+| RSI / protocol properties, CIM interface | — | ✅ | — | ✅ | `02/0a`, `02/0b`, `07/05` named from the Wireshark dissector; values preserved as hex, not interpreted |
+| Control/Response error decode | — | ✅ | — | ✅ | Codes `0x00`–`0x07` |
+| Set NameOfStation | ✅ | ✅ | ✅ | ✅ | `02/02`; configuration mode + per-operation confirmation + fresh revalidation; read-back Get |
+| Set IP parameters | ✅ | ✅ | ✅ | ✅ | `01/02`; 12-byte suite; temp/permanent qualifier; read-back Get |
+| ResetToFactorySettings | ✅ | ✅ | ✅ | ✅ | `05/06`; modes 1/2/4/8 only; per-operation confirmation; post-check |
+
+## 3. Configuration (Phase 3, guarded)
+
+| Capability | Wire format | Semantics | Status | Reason |
+|---|---|---|---|---|
+| Set NameOfStation | `02/02` + BlockQualifier `0x0000`/`0x0001` | Temporary/permanent | ✅ | Configuration mode, per-operation confirmation, fresh revalidation, read-back Get; no retry |
+| Set IP parameter | `01/02` + 12-byte suite + qualifier | Temporary/permanent; may drop communication | ✅ | Same safeguards; discovery does not prove the IP is unused |
+| Set Full IP suite | `01/03` | DNS fields | ⛔ | DNS layout not fully verified |
+| Set DHCP parameters | `03/xx` | DHCP control | ➖ | Not implemented |
+| Multi-block Start/Stop transaction | `05/01` + `05/02` | Global qualifier | ➖ | Not needed for the single-block writes; no multi-block UI |
+| Device signaling / LED | `05/03` | BlockQualifier `0x0000` + SignalValue `0x0100` | ✅ | Implemented as an **unguarded** identification action (no configuration mode; one unicast frame, rate-limited, no retry, no state change). Acknowledged by the lab device; the LED effect itself is not observable over DCP |
+
+## 4. Reset (Phase 4, guarded)
+
+| Variant | Wire format | Mode/qualifier | Status | Notes |
+|---|---|---|---|---|
+| ResetToFactorySettings | `05/06` | `mode << 1`; modes 1,2,4,8 transmitted | ✅ | Guarded; erased scope and post-reset behavior vendor-specific. Observed in one lab: modes 2 and 8 acknowledged, modes 1 and 4 rejected with block error `0x02` |
+| Legacy FactoryReset | `05/05` | BlockQualifier `0x0000` (no mode field) | ✅ | Guarded; full reset — p-net sets reset mode 99 and ignores the qualifier, so the erased scope cannot be selected. Observed in one lab: acknowledged with block error `0x00` |
+| Reset application data | `05/06`, qualifier `0x0002` | mode 1 | ✅ | Guarded; device support varies — one lab device rejected it with block error `0x02` |
+| Reset communication parameters | `05/06`, qualifier `0x0004` | mode 2 | ✅ | Guarded; one lab device acknowledged it and cleared name/IP |
+| Reset engineering parameters | `05/06`, qualifier `0x0006` | mode 3 | ❔ | Table value only; encoder refuses it |
+| Reset all except security | `05/06`, qualifier `0x0008` | mode 4 | ✅ | Guarded; device support varies |
+| Reset all to factory values | `05/06`, qualifier `0x0010` | mode 8 | ✅ | Guarded; not all data is guaranteed erased |
+| Reset and restore | `05/06`, qualifier `0x0012` | mode 9 | ❔ | Not verified; encoder refuses it |
+
+No batch, broadcast, or multi-device reset path exists. Every reset is preceded
+by a fresh unicast Identify and requires per-operation confirmation. Acknowledged resets
+are followed by an optional read-only post-check; acknowledgement is not proof of
+completion.
+
+## 5. Reporting and testing
+
+| Capability | Status | Notes |
+|---|---|---|
+| Structured transaction log | ✅ | Tx, matching response, late, unrelated, timeout |
+| Hex inspection | ✅ | Device details and packet capture |
+| PCAP export | ✅ | Classic pcap, DLT_EN10MB, timestamps |
+| Offline PCAP analysis | ✅ | Defensive reader; DCP decode |
+| JSON report | ✅ | Config, interface, devices, transactions, tests, limitations; schema version 2 (metadata = application/version only) |
+| HTML report | ✅ | Escaped, dependency-free |
+| Interface/capture readiness tests | ✅ | Read-only |
+| Identify discovery test | ✅ | Inconclusive on no response |
+| Unicast Identify test | ✅ | Device acceptance varies; inconclusive if unanswered |
+| Before/after identity comparison | ✅ | Read-only or after a guarded write; records name/IP/ID changes |
+| Get request/response test | ✅ | Offline mock and live read-only Get |
+| Block-error decoding test | ✅ | Codes `0x00`–`0x07` |
+| Bounded repeat discovery | ✅ | 3 requests, rate-limited |
+| Response-time measurement | ✅ | Measurement only, no SLA |
+| Parser/malformed fixtures | ✅ | Offline only |
+| PCAP roundtrip | ✅ | Offline |
+| Station-name/IP validation | ✅ | Offline |
+| Set/Reset tests | ✅ | Optional; require configuration mode and separate confirmation per operation; one state-changing test per run |
+
+### 5.1 Operator surfaces
+
+| Surface | Status | Notes |
+|---|---|---|
+| Desktop GUI (`dcp-studio`) | ✅ | Seven tabs, worker threads, confirmation dialog |
+| Headless CLI (`dcp-cli`, `python -m dcpstudio COMMAND`) | ✅ | Same services, codec, operations catalogue and safety gate as the GUI. Read-only `interfaces`/`discover`/`get`/`pcap`, unguarded `signal`, guarded `set-name`/`set-ip`/`reset` requiring all three safety flags, read-only `tests` (guarded test IDs refused), JSON output and JSON/HTML reports. No batch or broadcast path |
+
+## 6. Out of scope
+
+- PROFINET cyclic IO/RT, PTCP, MRP, LLDP topology.
+- Controller commissioning, AR setup, DCE-RPC/CM.
+- Firmware flashing, vendor unlock.
+- Conformance certification. Results are functional/interoperability checks.

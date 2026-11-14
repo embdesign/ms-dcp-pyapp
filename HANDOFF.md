@@ -3,12 +3,9 @@
 Project: `dcp-studio` 0.1.0 (package `dcpstudio`, folder `ms-dcp-pyapp`).
 Last updated: 2026-11-14.
 
-> **Git history is short.** `.git` exists on branch `main` tracking
-> `origin/main`; edits you make are uncommitted until the operator commits
-> them. History is minimal, so there is little to diff or revert to; all
-> statements below are based on direct inspection of the files as they exist on
-> disk. Take a backup archive before bulk edits and do not commit without
-> operator authorization.
+> All statements below are based on direct inspection of the files as they
+> exist on disk. Take a backup archive before bulk edits and do not commit
+> without operator authorization.
 
 ## Goal and acceptance criteria
 
@@ -47,7 +44,7 @@ config change was made.
   threading, safety table, phase table and limitations.
 - `AGENTS.md` — refreshed verified facts: 181 tests / ~70 s, `cli.py` as a
   consumer of `operations.py`, Signal exposed by the Device Details tab and
-  `dcp-cli signal`, branch `main` with a short history, `dist/` rebuilt 2026-11-14.
+  `dcp-cli signal`, `dist/` rebuilt 2026-11-14.
 - `README.md` — removed historical wording, refreshed the project layout and
   test-coverage list, corrected the “this phase” wording.
 - `HANDOFF.md` — replaced the historical session log with this handover.
@@ -73,18 +70,14 @@ Current capability summary (verified in the tree):
 - Demo/mock interface with three simulated devices; versioned non-sensitive UI
   preferences; explicit ruff and pytest gates.
 
-Git state: branch `main` tracking `origin/main`; the last commit is
-`dc39218 Update documentation.` Check `git status` before bulk edits and do not
-commit without operator authorization.
-
 ## Decisions and rationale
 
 - The request was documentation-only: `PROMPT.md` and `PLAN.md` had to describe
   the implemented build, and obsolete text had to be removed from `AGENTS.md`,
   `HANDOFF.md`, `PLAN.md` and `README.md`.
 - Facts were re-verified against the tree before writing: 181 tests pass, the
-  ruff gate is clean, PySide6 resolves to 6.12.0, `dist/` was rebuilt on
-  2026-11-14, and history is minimal (import plus documentation commits).
+  ruff gate is clean, PySide6 resolves to 6.12.0 and `dist/` was rebuilt on
+  2026-11-14.
 - Historical narrative (resolved review items, old coverage/refactor numbers,
   superseded phase labels) was removed rather than preserved as contradictory
   task state.
@@ -108,7 +101,6 @@ Constraints a future agent must preserve:
 |---|---|---|
 | Full suite | `QT_QPA_PLATFORM=offscreen uv run pytest` | **PASS** — 181 passed in 70.04 s |
 | Lint gate | `uv run ruff check src tests tools` | **PASS** — all checks passed |
-| Working-tree review | `git status --short` | Branch `main` tracking `origin/main`; history is the initial import plus documentation commits. (At the time of the first documentation pass the tree had 13 untracked top-level entries and no commits.) |
 | Package artifact inspection | `.venv/bin/python -m zipfile -l dist/dcp_studio-0.1.0-py3-none-any.whl` | **PASS** — contains `dcpstudio/cli.py`, `gui/app.py`, `services/signal.py`, `entry_points.txt`. `uv build` itself was not re-run in this documentation-only pass. |
 | Sensitive-data review | manual read of all changed documents | **PASS** — lab vendor/model/MAC/IP/station identifiers remain withheld; only the synthetic examples `02:00:00:00:00:11` and `192.168.20.x` appear. |
 
@@ -179,10 +171,7 @@ effect itself is not observable over DCP.
 
 Verified by inspection:
 
-1. **Minimal version-control history.** `.git` exists on branch `main` tracking
-   `origin/main`, but there are only a few commits, so there is little history to
-   diff or revert to. Make a backup archive before bulk edits.
-2. **Device-properties sub-option `0x09` is unnamed.** The p-net mirror defines
+1. **Device-properties sub-option `0x09` is unnamed.** The p-net mirror defines
    `PF_DCP_SUB_DEV_PROP_GATEWAY` at `0x09`, but the Wireshark dissector does not
    define it. It stays "Unknown sub-option 0x09" until an authoritative source
    resolves the disagreement.
@@ -198,12 +187,10 @@ Required work: none.
 
 Optional improvements, in priority order:
 
-1. Keep taking backups and committing with operator authorization; history is
-   still minimal, so there is little to revert to.
-2. Resolve sub-option `0x09` against an authoritative source before naming it.
-3. Re-run `uv build` after any future source change; this documentation-only
+1. Resolve sub-option `0x09` against an authoritative source before naming it.
+2. Re-run `uv build` after any future source change; this documentation-only
    pass did not change the package contents.
-4. Re-run the isolated-lab procedure for any new device or vendor.
+3. Re-run the isolated-lab procedure for any new device or vendor.
 
 ## How to resume
 
@@ -225,4 +212,4 @@ For further work, start from `src/dcpstudio/operations.py`
 (rendering), `testrunner/cases.py` (test catalogue) and `cli.py` (headless
 adapter). Run `uv run ruff check src tests tools` and
 `QT_QPA_PLATFORM=offscreen uv run pytest` before and after any change.
-History is minimal: make a backup archive before bulk edits.
+Make a backup archive before bulk edits.

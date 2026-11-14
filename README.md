@@ -118,6 +118,23 @@ Scapy lists Npcap adapters either by friendly name (`Ethernet`) or by NPF device
 path (`\Device\NPF_{GUID}`). Both identify the same NIC. See
 [`docs/troubleshooting.md`](docs/troubleshooting.md#2-windows-npcap--administrator).
 
+### Prebuilt bundles (no Python required)
+
+GitHub Actions builds a Windows and a Linux bundle on every push to `main`; a
+`v*` tag attaches them to the GitHub Release. Unpack an archive and run the
+executable inside — **Python and `uv` are not needed on the target machine**:
+
+| Archive | Contents |
+|---|---|
+| `dcp-studio-windows-x64.zip`, `dcp-studio-linux-x64.zip` | desktop application (`dcp-studio[.exe]`) |
+| `dcp-cli-windows-x64.zip`, `dcp-cli-linux-x64.zip` | headless CLI (`dcp-cli[.exe]`) |
+
+Packaging removes the Python setup, not the platform requirements: **Npcap** is
+still needed on Windows, and a real interface still needs Administrator or
+`CAP_NET_RAW`. The `demo0` mock works unelevated. The Windows binaries are
+unsigned, so SmartScreen warns on first launch. Build them yourself with the
+specs in [`packaging/`](packaging/README.md).
+
 ### Demo without hardware
 
 Select **`demo0 — Demo (mock) — offline simulated PROFINET segment`** in the

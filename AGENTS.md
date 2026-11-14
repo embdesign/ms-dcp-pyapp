@@ -27,6 +27,12 @@ sudo -E uv run dcp-studio                   # raw L2 capture/send on Linux
 uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
 ```
 
+- **Standalone bundles** are built by PyInstaller from `packaging/*.spec`
+  (one folder, GUI + Qt-free CLI). CI does it in `.github/workflows/package.yml`
+  (`ubuntu-22.04` + `windows-latest`) and `release.yml` attaches the zips to a
+  `v*` tag. PyInstaller cannot cross-compile and the specs must stay in step with
+  the entry points; `packaging/README.md` records the constraints.
+
 - `tests/conftest.py` already sets `QT_QPA_PLATFORM=offscreen` and redirects
   `XDG_CONFIG_HOME`/`APPDATA` to a temp dir. Do not write to the real profile
   in tests.

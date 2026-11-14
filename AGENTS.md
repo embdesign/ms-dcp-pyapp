@@ -96,10 +96,9 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
 
 ## Pitfalls
 
-- `.git` exists on branch `main` tracking `origin/main` with two commits
-  (`8083f38 Initial project import.`, `ea8a008 Update documentation.`). History
-  is minimal, so there is little to diff or revert to. Uncommitted
-  documentation edits are normal; make backups before bulk edits and do not
+- `.git` exists on branch `main` tracking `origin/main` with a short history
+  (initial import plus documentation commits), so there is little to diff or
+  revert to. Check `git status` and make backups before bulk edits; do not
   commit without operator authorization.
 - `dist/` was rebuilt with `uv build` on 2026-11-14 and contains the current
   `cli.py` and both entry points. Rebuild it after any source change before

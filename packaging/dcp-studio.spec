@@ -22,12 +22,15 @@ into a temporary directory on every start.
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).parent
 NAME = "dcp-studio"
 
 datas = collect_data_files("scapy")
+# importlib.metadata reads this at run time to report the application version;
+# without it a frozen build would fall back to "0.0.0+unknown".
+datas += copy_metadata("dcp-studio")
 hiddenimports = collect_submodules("scapy")
 
 # Qt modules this application never imports; only QtCore, QtGui and QtWidgets

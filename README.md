@@ -13,6 +13,10 @@ Built with **Python 3.11+**, **PySide6**, **Scapy 2.8.0**, **uv**, and
 > operations require configuration mode, per-operation confirmation, fresh target
 > revalidation, and never retry automatically. No batch or broadcast path exists.
 
+![DCP Studio main window: Interfaces & Discovery tab with interface list,
+Identify discovery controls and the discovered-device
+table](docs/pics/dcp_studio.png)
+
 ---
 
 ## What it does

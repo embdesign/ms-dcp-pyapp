@@ -140,11 +140,9 @@ class TestRunnerTabMixin:
             if case.implemented:
                 check_flags |= Qt.ItemFlag.ItemIsEnabled
             check.setFlags(check_flags)
-            check.setCheckState(
-                Qt.CheckState.Checked
-                if (case.implemented and case.default_enabled)
-                else Qt.CheckState.Unchecked
-            )
+            # Every test starts deselected: the operator opts in explicitly with
+            # the row checkbox, "Select all tests" or "Run selected tests".
+            check.setCheckState(Qt.CheckState.Unchecked)
             check.setData(Qt.ItemDataRole.UserRole, case.test_id)
             self.test_table.setItem(row, 0, check)
             self.test_table.setItem(row, 1, _item(case.test_id, mono=True))

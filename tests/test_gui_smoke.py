@@ -47,6 +47,11 @@ def test_window_has_seven_tabs_and_guarded_state_changing_controls():
         assert window.config_mode_button.isEnabled() is True
         assert window.safety_gate.configuration_mode is False
         assert window.test_table.rowCount() == 20
+        # No test is preselected: the operator chooses what to run.
+        assert all(
+            window.test_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
+            for row in range(window.test_table.rowCount())
+        )
         assert window.reset_mode_combo.count() == 5
         assert window.reset_mode_combo.itemData(4) == "legacy"
         assert window.current_interface is None

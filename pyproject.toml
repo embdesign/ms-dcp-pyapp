@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "dcp-studio"
 version = "0.1.0"
-description = "PROFINET DCP discovery, guarded configuration, verified reset variants, and functional testing (Phases 1-4)"
+description = "PROFINET DCP discovery, guarded configuration, verified reset variants, and functional testing"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

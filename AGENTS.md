@@ -22,7 +22,7 @@ uv run pytest --cov=dcpstudio --cov-report=term-missing
 uv run ruff check src tests tools           # configured lint gate (clean)
 uv run dcp-studio                           # launch GUI
 uv run dcp-cli --help                       # headless CLI (also python -m dcpstudio COMMAND)
-uv run dcp-cli interfaces                   # list interfaces (demo0 is the default target)
+uv run dcp-cli interfaces                   # list interfaces ('demo'/'demo0' = offline mock)
 sudo -E uv run dcp-studio                   # raw L2 capture/send on Linux
 uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
 ```
@@ -96,10 +96,11 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
 
 ## Pitfalls
 
-- `.git` exists on branch `main` with remote `origin`, but there are **no
-  commits** and every file is untracked; there is no history, diff or revert.
-  Make backups before bulk edits and do not commit without operator
-  authorization.
+- `.git` exists on branch `main` tracking `origin/main` with two commits
+  (`8083f38 Initial project import.`, `ea8a008 Update documentation.`). History
+  is minimal, so there is little to diff or revert to. Uncommitted
+  documentation edits are normal; make backups before bulk edits and do not
+  commit without operator authorization.
 - `dist/` was rebuilt with `uv build` on 2026-11-14 and contains the current
   `cli.py` and both entry points. Rebuild it after any source change before
   shipping.

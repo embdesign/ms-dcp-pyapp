@@ -78,8 +78,8 @@ See:
 ### Linux
 
 ```bash
-git clone <your-repo-url> dcp-studio
-cd dcp-studio
+git clone <your-repo-url>
+cd ms-dcp-pyapp
 
 uv sync                 # creates .venv, installs pinned deps
 uv run dcp-studio

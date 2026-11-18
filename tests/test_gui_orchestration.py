@@ -21,6 +21,14 @@ from dcpstudio.operations import set_name_spec  # noqa: E402
 from dcpstudio.services.discovery import DiscoveryConfig  # noqa: E402
 from dcpstudio.services.get import GET_PRESETS, GetConfig  # noqa: E402
 from dcpstudio.services.write import identity_text  # noqa: E402
+from dcpstudio.testrunner.cases import (  # noqa: E402
+    DEVICE_READ_ONLY_SUITE,
+    DEVICE_VALIDATION_SUITE,
+    FULL_VALIDATION_SUITE,
+    TEST_SUITES,
+    TOOL_SELF_TEST_SUITE,
+    suite_test_ids,
+)
 
 
 def _app() -> QApplication:
@@ -174,11 +182,170 @@ def test_selected_test_ids_reflect_checkbox_state():
         selected = window._selected_test_ids()
         assert "parser.fixture_decode" in selected
         assert {"write.set_name", "write.set_ip", "write.reset"} <= selected
-        assert len(selected) == window.test_table.rowCount()
+        assert len(selected) == len(window._test_row_by_id)
         assert all(
             window.test_table.item(row, 0).checkState() == Qt.CheckState.Checked
-            for row in range(window.test_table.rowCount())
+            for row in window._test_row_by_id.values()
         )
+        assert all(
+            window.test_table.item(row, 0).checkState() == Qt.CheckState.Checked
+            for row in window._group_row_by_category.values()
+        )
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_device_suite_preset_selects_read_checks_and_writes():
+    app = _app()
+    window = MainWindow()
+    try:
+        window._apply_suite(DEVICE_VALIDATION_SUITE)
+        selected = window._selected_test_ids()
+        assert selected == set(suite_test_ids(DEVICE_VALIDATION_SUITE))
+        assert {"write.set_name", "write.set_ip", "write.reset"} <= selected
+        assert window.suite_preset_combo.currentData() == DEVICE_VALIDATION_SUITE.key
+        assert DEVICE_VALIDATION_SUITE.title in window.test_selection_label.text()
+        # Every category the suite covers is fully checked; the offline groups are not.
+        for category in ("Environment", "Live DCP", "State-changing (optional)"):
+            row = window._group_row_by_category[category]
+            assert window.test_table.item(row, 0).checkState() == Qt.CheckState.Checked
+        for category in ("Offline parser", "Offline transactions", "Offline validation"):
+            row = window._group_row_by_category[category]
+            assert (
+                window.test_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
+            )
+        # The state-changing declaration is shown, not a modal confirmation.
+        assert not window.test_write_declaration_label.isHidden()
+        assert "Configuration tab" in window.test_write_declaration_label.text()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_read_only_presets_never_select_a_state_changing_test():
+    app = _app()
+    window = MainWindow()
+    try:
+        for suite in (DEVICE_READ_ONLY_SUITE, TOOL_SELF_TEST_SUITE):
+            window._apply_suite(suite)
+            selected = window._selected_test_ids()
+            assert selected == set(suite.test_ids)
+            assert not selected & {"write.set_name", "write.set_ip", "write.reset"}
+            assert window.suite_preset_combo.currentData() == suite.key
+            assert window.test_write_declaration_label.isHidden()
+        # Every suite in the preset control is reachable.
+        assert [suite.key for suite in TEST_SUITES] == [
+            window.suite_preset_combo.itemData(index)
+            for index in range(1, window.suite_preset_combo.count())
+        ]
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_full_validation_preset_is_tool_self_test_plus_device_validation():
+    app = _app()
+    window = MainWindow()
+    try:
+        window._apply_suite(FULL_VALIDATION_SUITE)
+        assert window._selected_test_ids() == set(FULL_VALIDATION_SUITE.test_ids)
+        assert set(FULL_VALIDATION_SUITE.test_ids) == set(
+            TOOL_SELF_TEST_SUITE.test_ids
+        ) | set(DEVICE_VALIDATION_SUITE.test_ids)
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_write_parameters_come_from_the_configuration_and_reset_tabs():
+    app = _app()
+    window, app = _window_with_discovery()
+    try:
+        # An invalid name is refused with a pointer to the Configuration tab.
+        window.name_edit.setText("bad name")
+        _parameters, error = window._write_test_parameters(["write.set_name"])
+        assert "Configuration tab" in error
+        # Valid values from the tabs become the suite's write parameters.
+        window.name_edit.setText("line-77.validated")
+        window.ip_edit.setText("192.0.2.77")
+        window.mask_edit.setText("255.255.255.0")
+        window.gateway_edit.setText("192.0.2.1")
+        parameters, error = window._write_test_parameters(
+            ["write.set_name", "write.set_ip", "write.reset"]
+        )
+        assert error == "", error
+        assert parameters["write.set_name"]["name"] == "line-77.validated"
+        assert parameters["write.set_ip"]["ip_address"] == "192.0.2.77"
+        assert parameters["write.reset"] == {
+            "reset_mode": window.reset_mode_combo.currentData()
+        }
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_device_under_test_selector_lists_discovered_devices():
+    app = _app()
+    window, app = _window_with_discovery()
+    try:
+        window._refresh_dut_combo()
+        assert window.dut_combo.count() == 4  # placeholder + 3 mock devices
+        assert window.dut_combo.currentData() == window.selected_device.mac
+        second = window.latest_discovery.devices[1]
+        window.dut_combo.setCurrentIndex(window.dut_combo.findData(second.mac))
+        app.processEvents()
+        assert window._dut_identity().mac == second.mac
+        window._apply_suite(DEVICE_VALIDATION_SUITE)
+        assert second.mac in window.test_write_declaration_label.text()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_device_table_selection_drives_the_device_under_test():
+    app = _app()
+    window, app = _window_with_discovery()
+    try:
+        devices = window._devices_for_current_interface()
+        target = devices[-1]
+        window.device_table.selectRow(len(devices) - 1)
+        app.processEvents()
+        assert window.selected_device.mac == target.mac
+        assert window._dut_identity().mac == target.mac
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_group_header_toggles_children_and_child_change_is_partial():
+    app = _app()
+    window = MainWindow()
+    try:
+        window._deselect_all_tests()
+        group_row = window._group_row_by_category["Live DCP"]
+        header = window.test_table.item(group_row, 0)
+        header.setCheckState(Qt.CheckState.Checked)
+        app.processEvents()
+        live_ids = {
+            test_id
+            for test_id, row in window._test_row_by_id.items()
+            if row in window._rows_by_category["Live DCP"]
+        }
+        assert live_ids <= window._selected_test_ids()
+        assert header.checkState() == Qt.CheckState.Checked
+        # A manual change drops the preset label back to a custom selection.
+        assert window.suite_preset_combo.currentIndex() == 0
+
+        # Unchecking one child turns the header into the partial state.
+        child_row = window._rows_by_category["Live DCP"][0]
+        window.test_table.item(child_row, 0).setCheckState(Qt.CheckState.Unchecked)
+        app.processEvents()
+        assert header.checkState() == Qt.CheckState.PartiallyChecked
+
+        header.setCheckState(Qt.CheckState.Unchecked)
+        app.processEvents()
+        assert not (live_ids & window._selected_test_ids())
     finally:
         window.close()
         app.processEvents()

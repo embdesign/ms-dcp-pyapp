@@ -1,0 +1,56 @@
+name: CI
+
+# Lint, type-check and test on every change. `package.yml` only builds the
+# standalone bundles; a successful bundle build is not a test result.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: lint + types + tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the declared floor; 3.12 is what the bundles are built with.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+          cache-dependency-glob: uv.lock
+
+      - name: Sync environment
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check src tests tools
+
+      - name: Type check (pure modules)
+        run: uv run mypy
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run pytest --cov=dcpstudio --cov-report=term-missing --cov-fail-under=72

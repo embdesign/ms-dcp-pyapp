@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Slot
@@ -23,12 +22,13 @@ from PySide6.QtWidgets import (
 )
 
 from ...constants import DCP_BPF_FILTER
+from ...html_render import esc
 from ...model import CapturedFrame, iso_utc
 from ...pcap_io import write_pcap
 from ...reporting import SENSITIVE_WARNING, report_filename
 from ...utils import hexdump
 from ..workers import PcapLoadWorker
-from .common import MAX_PACKET_ROWS, PACKET_COLUMNS, banner, mono_font
+from .common import MAX_PACKET_ROWS, PACKET_COLUMNS, apply_mono_font, banner
 from .common import table_item as _item
 
 
@@ -39,12 +39,12 @@ class CaptureTabMixin:
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addWidget(
             banner(
-                f"<b>Capture data is sensitive.</b> {html.escape(SENSITIVE_WARNING)}",
+                f"<b>Capture data is sensitive.</b> {esc(SENSITIVE_WARNING)}",
                 "Warning",
             )
         )
         controls = QHBoxLayout()
-        self.capture_filter_label = QLabel(f"BPF: <code>{html.escape(DCP_BPF_FILTER)}</code>")
+        self.capture_filter_label = QLabel(f"BPF: <code>{esc(DCP_BPF_FILTER)}</code>")
         self.capture_filter_label.setTextFormat(Qt.TextFormat.RichText)
         self.dcp_only_check = QCheckBox("Show DCP frames only")
         self.dcp_only_check.setChecked(self.config.show_dcp_only)
@@ -85,7 +85,7 @@ class CaptureTabMixin:
         detail_layout.addWidget(self.packet_detail_label)
         self.packet_detail = QPlainTextEdit()
         self.packet_detail.setReadOnly(True)
-        self.packet_detail.setFont(mono_font())
+        apply_mono_font(self.packet_detail)
         self.packet_detail.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         detail_layout.addWidget(self.packet_detail)
         splitter.addWidget(detail_group)
@@ -167,15 +167,15 @@ class CaptureTabMixin:
         parsed = frame.parsed
         summary = parsed.summary() if parsed else "Unparsed frame"
         lines = [
-            f"<b>{html.escape(summary)}</b>",
-            f"Captured {html.escape(iso_utc(frame.timestamp) or '')} · "
-            f"{html.escape(frame.interface_id)} · {html.escape(frame.direction)} · "
+            f"<b>{esc(summary)}</b>",
+            f"Captured {esc(iso_utc(frame.timestamp) or '')} · "
+            f"{esc(frame.interface_id)} · {esc(frame.direction)} · "
             f"{len(frame.raw)} bytes",
         ]
         if parsed and parsed.warnings:
             lines.append(
                 "<span style='color:#8c1d12'>Warnings: "
-                + html.escape("; ".join(parsed.warnings))
+                + esc("; ".join(parsed.warnings))
                 + "</span>"
             )
         self.packet_detail_label.setText("<br>".join(lines))
@@ -278,3 +278,97 @@ class CaptureTabMixin:
         self.packet_detail_label.setText("Select a frame to inspect it.")
         self._update_capture_stats()
         self.event_log.info("capture.cleared", "Capture buffer cleared")
+
+    # ----------------------------------------------------- capture lifecycle
+    def _start_capture(self, silent: bool = False) -> bool:
+        if self.transport is None:
+            if not silent:
+                QMessageBox.warning(self, "No interface", "Select an interface first.")
+            return False
+        try:
+            self.transport.start_capture()
+            self.last_readiness = self.transport.readiness()
+            self.event_log.info(
+                "capture.started",
+                f"Passive capture started on {self.current_interface.name if self.current_interface else '?'}",
+                {"filter": getattr(self.transport, "used_filter", "")},
+            )
+            self._update_capture_controls()
+            return True
+        except Exception as exc:
+            self.last_readiness = self.transport.readiness()
+            self._update_permission_label()
+            self.event_log.error("capture.start_failed", str(exc))
+            if not silent:
+                QMessageBox.critical(
+                    self,
+                    "Capture could not start",
+                    str(exc)
+                    + "\n\nSee docs/troubleshooting.md for Linux CAP_NET_RAW and "
+                    "Windows Npcap instructions.",
+                )
+            return False
+
+    def _stop_capture(self, silent: bool = False) -> None:
+        if self.transport is not None and self.transport.is_capturing:
+            try:
+                self.transport.stop_capture()
+                self.event_log.info("capture.stopped", "Passive capture stopped")
+            except Exception as exc:
+                self.event_log.warning("capture.stop_failed", str(exc))
+        self._update_capture_controls()
+
+    def _update_capture_controls(self) -> None:
+        capturing = bool(self.transport is not None and self.transport.is_capturing)
+        ready = self.transport is not None
+        get_running = self._get_running()
+        busy = (
+            self._discovery_running()
+            or self._tests_running()
+            or get_running
+            or self._write_running()
+            or self._post_check_running()
+        )
+        self.start_capture_button.setEnabled(ready and not capturing and not busy)
+        self.stop_capture_button.setEnabled(capturing and not busy)
+        self.refresh_button.setEnabled(not capturing and not busy)
+        self.interface_table.setEnabled(not busy)
+        self.discover_button.setEnabled(ready and not busy)
+        self.cancel_discovery_button.setEnabled(self._discovery_running())
+        self.run_tests_button.setEnabled(ready and not busy)
+        self.run_suite_button.setEnabled(ready and not busy)
+        self.cancel_tests_button.setEnabled(self._tests_running())
+        self.unicast_identify_button.setEnabled(
+            self.selected_device is not None and ready and not busy
+        )
+        self.get_blocks_button.setEnabled(
+            self.selected_device is not None
+            and ready
+            and self.get_service is not None
+            and not busy
+        )
+        self.cancel_get_button.setEnabled(get_running)
+        self.get_preset_combo.setEnabled(not get_running)
+        self.capture_state_label.setText(
+            f"Capture: {'running' if capturing else 'stopped'}"
+            + (f" · {self.current_interface.name}" if self.current_interface else "")
+        )
+        self.status_capture.setText(f"Capture: {'running' if capturing else 'stopped'}")
+        if self.current_interface:
+            self.status_interface.setText(
+                f"Interface: {self.current_interface.name} ({self.current_interface.mac or 'no MAC'})"
+            )
+        else:
+            self.status_interface.setText("Interface: none")
+        self._update_config_controls()
+
+    def _update_capture_stats(self) -> None:
+        stats = self.capture.stats()
+        text = (
+            f"Captured frames: {stats.get('total', 0)} · DCP: {stats.get('dcp', 0)} · "
+            f"other PROFINET: {stats.get('profinet_other', 0)} · other: {stats.get('other', 0)}"
+        )
+        if stats.get("dropped"):
+            text += f" · dropped from display buffer: {stats['dropped']}"
+        if hasattr(self, "packet_stats_label"):
+            self.packet_stats_label.setText(text)

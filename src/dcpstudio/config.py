@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .constants import DEFAULT_MIN_REQUEST_INTERVAL_S, DEFAULT_RESPONSE_DELAY_FACTOR
-from .transport.interfaces import MOCK_INTERFACE_ID
+from .interfaces import MOCK_INTERFACE_ID
 
 CONFIG_SCHEMA_VERSION = 1
 

@@ -52,9 +52,17 @@ from ..model import (
     WriteResult,
     utc_now,
 )
+from ..outcomes import (
+    PostCheckState,
+    RequestState,
+    ResponseVerdict,
+    TransactionOutcome,
+    Verification,
+)
 from ..safety import ConfirmationRequest, SafetyError, SafetyGate
 from ..transport.base import DcpTransport, TransportError
 from ..validation import validate_ip_suite, validate_station_name
+from .correlation import PendingRequest, decide_frame, wait_for_response
 from .discovery import LATE_RESPONSE_GRACE_S, DiscoveryConfig, DiscoveryService
 from .get import GetConfig, GetService
 from .rate_limit import RequestRateLimiter
@@ -96,22 +104,11 @@ class WriteRequest:
 
 
 @dataclass(slots=True)
-class _PendingWrite:
-    xid: int
-    target_mac: str
-    expected_option: int
-    expected_suboption: int
-    deadline_monotonic: float
-    request_monotonic: float
-    request_tx_utc: datetime
-    response: DcpFrame | None = None
-    response_timestamp: datetime | None = None
-    rtt_ms: float | None = None
-    late: bool = False
-    duplicate_responses: int = 0
-    unmatched_responses: int = 0
-    transactions: list[TransactionRecord] = field(default_factory=list)
-    response_event: threading.Event = field(default_factory=threading.Event)
+class _PendingWrite(PendingRequest):
+    """A guarded Set/Reset awaiting its Control/Response."""
+
+    expected_option: int = 0
+    expected_suboption: int = 0
 
 
 def identity_text(device: DeviceIdentity) -> str:
@@ -169,11 +166,8 @@ class WriteService:
         if direction != "rx":
             return
         with self._lock:
-            pending = self._pending
-            if pending is None:
+            if self._pending is None:
                 return
-            xid = pending.xid
-            target = pending.target_mac
 
         frame = parse_frame(
             raw, captured_at=timestamp, interface_id=self.transport.interface.id
@@ -191,138 +185,46 @@ class WriteService:
             return
 
         local_mac = (self.transport.interface.mac or "").lower()
-        if local_mac and frame.dst_mac and frame.dst_mac.lower() not in (
-            local_mac,
-            "ff:ff:ff:ff:ff:ff",
-        ):
-            with self._lock:
-                pending = self._pending
-                if pending is not None and frame.xid == pending.xid:
-                    pending.unmatched_responses += 1
-                    self._record(
-                        pending,
-                        timestamp=timestamp,
-                        event="set_response",
-                        interface_id=self.transport.interface.id,
-                        outcome="unrelated_response_ignored",
-                        detail=f"Set response destination {frame.dst_mac} is not this interface",
-                        xid=frame.xid,
-                        service="Set",
-                        peer_mac=frame.src_mac,
-                        frame_id=frame.frame_id,
-                        raw_hex=frame.raw.hex(),
-                    )
-            return
-
         with self._lock:
             pending = self._pending
             if pending is None:
                 return
-            if frame.xid != xid:
-                pending.unmatched_responses += 1
-                self._record(
-                    pending,
-                    timestamp=timestamp,
-                    event="set_response",
-                    interface_id=self.transport.interface.id,
-                    outcome="unrelated_response_ignored",
-                    detail=f"Set response Xid 0x{(frame.xid or 0):08x} does not match request",
-                    xid=frame.xid,
-                    service="Set",
-                    peer_mac=frame.src_mac,
-                    frame_id=frame.frame_id,
-                    raw_hex=frame.raw.hex(),
-                )
-                return
-            if (frame.src_mac or "").lower() != target.lower():
-                pending.unmatched_responses += 1
-                self._record(
-                    pending,
-                    timestamp=timestamp,
-                    event="set_response",
-                    interface_id=self.transport.interface.id,
-                    outcome="unrelated_response_ignored",
-                    detail=f"Set target was {target}, response came from {frame.src_mac}",
-                    xid=xid,
-                    service="Set",
-                    peer_mac=frame.src_mac,
-                    frame_id=frame.frame_id,
-                    raw_hex=frame.raw.hex(),
-                )
-                return
-            if pending.response is not None:
-                pending.duplicate_responses += 1
-                self._record(
-                    pending,
-                    timestamp=timestamp,
-                    event="set_response",
-                    interface_id=self.transport.interface.id,
-                    outcome="duplicate_response_ignored",
-                    detail="A Set response was already received for this Xid",
-                    xid=xid,
-                    service="Set",
-                    peer_mac=frame.src_mac,
-                    frame_id=frame.frame_id,
-                    raw_hex=frame.raw.hex(),
-                )
+            decision = decide_frame(
+                pending,
+                frame,
+                timestamp,
+                interface_id=self.transport.interface.id,
+                local_mac=local_mac,
+                label="Set",
+                service="Set",
+                event="set_response",
+                duplicate_detail="A Set response was already received for this Xid",
+                extra_check=_wrong_block_detail,
+            )
+            if decision is not None:
                 return
 
-            # Control/Response carries the involved option/sub-option. If both
-            # are present and do not match the single block we sent, this is not
-            # our operation even if the Xid collides.
-            for block in frame.blocks:
-                if (
-                    block.option == int(Option.CONTROL)
-                    and block.suboption == int(ControlSubOption.RESPONSE)
-                    and block.error_option is not None
-                    and block.error_suboption is not None
-                    and (
-                        block.error_option != pending.expected_option
-                        or block.error_suboption != pending.expected_suboption
-                    )
-                ):
-                    pending.unmatched_responses += 1
-                    self._record(
-                        pending,
-                        timestamp=timestamp,
-                        event="set_response",
-                        interface_id=self.transport.interface.id,
-                        outcome="unrelated_response_ignored",
-                        detail=(
-                            "Set response refers to option/sub-option "
-                            f"0x{block.error_option:02x}/0x{block.error_suboption:02x}, "
-                            "not the requested block"
-                        ),
-                        xid=xid,
-                        service="Set",
-                        peer_mac=frame.src_mac,
-                        frame_id=frame.frame_id,
-                        raw_hex=frame.raw.hex(),
-                    )
-                    return
-
-            rtt_ms = max(0.0, (time.monotonic() - pending.request_monotonic) * 1000.0)
-            late = time.monotonic() > pending.deadline_monotonic
-            pending.response = frame
-            pending.response_timestamp = timestamp
-            pending.rtt_ms = round(rtt_ms, 3)
-            pending.late = late
+            pending.mark_response(frame, timestamp)
             verdict, error, text = classify_set_response(frame)
             self._record(
                 pending,
                 timestamp=timestamp,
                 event="set_response",
                 interface_id=self.transport.interface.id,
-                outcome="late_response" if late else f"matching_response_received:{verdict}",
+                outcome=(
+                    TransactionOutcome.LATE_RESPONSE
+                    if pending.late
+                    else f"{TransactionOutcome.MATCHING_RESPONSE_RECEIVED}:{verdict}"
+                ),
                 detail=f"{verdict}: {text}",
-                xid=xid,
+                xid=pending.xid,
                 service="Set",
                 peer_mac=frame.src_mac,
                 frame_id=frame.frame_id,
-                rtt_ms=round(rtt_ms, 3),
+                rtt_ms=pending.rtt_ms,
                 raw_hex=frame.raw.hex(),
             )
-            pending.response_event.set()
+            pending.notify_response()
 
     # -------------------------------------------------------------- execute
     def execute(
@@ -412,7 +314,7 @@ class WriteService:
             self._validate_request(request)
             self._confirm(request)
         except (SafetyError, ValueError) as exc:
-            result.state = "blocked"
+            result.state = RequestState.BLOCKED
             result.error = str(exc)
             result.finished_at = utc_now()
             result.warnings.append("No frame was transmitted.")
@@ -424,13 +326,13 @@ class WriteService:
             return False
 
         if not self.transport.is_capturing:
-            result.state = "blocked"
+            result.state = RequestState.BLOCKED
             result.error = "Passive capture is not running"
             result.finished_at = utc_now()
             result.warnings.append("No frame was transmitted.")
             return False
         if not self.transport.interface.mac:
-            result.state = "blocked"
+            result.state = RequestState.BLOCKED
             result.error = "Selected interface has no MAC address"
             result.finished_at = utc_now()
             result.warnings.append("No frame was transmitted.")
@@ -459,7 +361,7 @@ class WriteService:
                 cancel_event=cancel_event,
             )
         except Exception as exc:
-            result.state = "target_unverified"
+            result.state = RequestState.TARGET_UNVERIFIED
             result.error = f"Target revalidation failed: {type(exc).__name__}: {exc}"
             result.finished_at = utc_now()
             result.warnings.append("No state-changing frame was transmitted.")
@@ -467,7 +369,7 @@ class WriteService:
         result.transactions.extend(revalidation.transactions)
 
         if revalidation.cancelled:
-            result.state = "cancelled"
+            result.state = RequestState.CANCELLED
             result.cancelled = True
             result.finished_at = utc_now()
             result.warnings.append(
@@ -484,7 +386,7 @@ class WriteService:
             None,
         )
         if target is None:
-            result.state = "target_unverified"
+            result.state = RequestState.TARGET_UNVERIFIED
             result.error = (
                 "The selected target did not answer a fresh unicast Identify. "
                 "No Set/Reset frame was transmitted."
@@ -500,7 +402,7 @@ class WriteService:
                 live_identity=identity_text(target),
             )
         except SafetyError as exc:
-            result.state = "target_unverified"
+            result.state = RequestState.TARGET_UNVERIFIED
             result.error = str(exc)
             result.finished_at = utc_now()
             result.warnings.append("No state-changing frame was transmitted.")
@@ -524,7 +426,7 @@ class WriteService:
             raw_request = self._build(request, xid)
             result.request_frame_hex = raw_request.hex()
         except Exception as exc:
-            result.state = "blocked"
+            result.state = RequestState.BLOCKED
             result.error = f"Could not encode the request: {exc}"
             result.finished_at = utc_now()
             result.warnings.append("No frame was transmitted.")
@@ -533,7 +435,7 @@ class WriteService:
         if progress:
             progress(f"Waiting for request pacing ({self.limiter.remaining_s():.1f} s)…")
         if not self.limiter.wait(cancel_event):
-            result.state = "cancelled"
+            result.state = RequestState.CANCELLED
             result.cancelled = True
             result.finished_at = utc_now()
             result.warnings.append(
@@ -552,7 +454,7 @@ class WriteService:
         )
         with self._lock:
             if self._pending is not None:
-                result.state = "error"
+                result.state = RequestState.ERROR
                 result.error = "Another state-changing transaction is already pending"
                 result.finished_at = utc_now()
                 return None
@@ -563,7 +465,7 @@ class WriteService:
         except Exception as exc:
             with self._lock:
                 self._pending = None
-            result.state = "error"
+            result.state = RequestState.ERROR
             result.error = (
                 str(exc) if isinstance(exc, TransportError) else f"Transmission failed: {exc}"
             )
@@ -579,7 +481,7 @@ class WriteService:
                 timestamp=pending.request_tx_utc,
                 event="set_request",
                 interface_id=self.transport.interface.id,
-                outcome="transmitted",
+                outcome=TransactionOutcome.TRANSMITTED,
                 detail=(
                     f"{result.operation_text}; "
                     f"qualifier 0x{_request_qualifier(request):04x}; "
@@ -611,20 +513,15 @@ class WriteService:
         progress: Callable[[str], None] | None,
     ) -> tuple[DcpFrame | None, bool]:
         """Step 3: bounded wait for the first matching response. No retry."""
-        last_progress = 0.0
-        while True:
-            if cancel_event.is_set():
-                break
-            remaining = pending.deadline_monotonic - time.monotonic()
-            if remaining <= -LATE_RESPONSE_GRACE_S:
-                break
-            if pending.response_event.wait(
-                min(0.05, max(0.0, remaining) if remaining > 0 else 0.02)
-            ):
-                break
-            if progress and remaining > 0 and (time.monotonic() - last_progress) > 0.25:
-                last_progress = time.monotonic()
-                progress(f"Waiting for Set response… {remaining:.1f} s remaining")
+        wait_for_response(
+            pending,
+            cancel_event,
+            grace_s=LATE_RESPONSE_GRACE_S,
+            progress=progress,
+            progress_text=lambda remaining: (
+                f"Waiting for Set response… {remaining:.1f} s remaining"
+            ),
+        )
 
         cancelled_before_response = cancel_event.is_set() and pending.response is None
         with self._lock:
@@ -650,7 +547,7 @@ class WriteService:
         cancelled_before_response: bool,
     ) -> WriteResult:
         if cancelled_before_response:
-            result.state = "cancelled"
+            result.state = RequestState.CANCELLED
             result.cancelled = True
             result.warnings.append(
                 "Cancelled while waiting. The Set/Reset frame had already been transmitted; "
@@ -662,7 +559,7 @@ class WriteService:
                     timestamp=result.finished_at,
                     event="set_cancelled",
                     interface_id=self.transport.interface.id,
-                    outcome="outcome_unknown",
+                    outcome=TransactionOutcome.OUTCOME_UNKNOWN,
                     detail="Cancelled after transmission; no matching response observed",
                     xid=result.xid,
                     service="Set",
@@ -671,7 +568,7 @@ class WriteService:
                 )
             )
         else:
-            result.state = "no_response"
+            result.state = RequestState.NO_RESPONSE
             result.warnings.append(
                 "No matching Set response was observed. This is outcome unknown, not "
                 "proof that the device rejected or failed to apply the operation. "
@@ -682,7 +579,7 @@ class WriteService:
                     timestamp=result.finished_at,
                     event="set_timeout",
                     interface_id=self.transport.interface.id,
-                    outcome="outcome_unknown",
+                    outcome=TransactionOutcome.OUTCOME_UNKNOWN,
                     detail="No matching Set response within the configured window",
                     xid=result.xid,
                     service="Set",
@@ -700,16 +597,16 @@ class WriteService:
         result.response_verdict = verdict
         result.block_error = error
         if result.late:
-            result.state = "late_response"
+            result.state = RequestState.LATE_RESPONSE
             result.warnings.append("The Set response arrived after the configured timeout.")
-        elif verdict == "acknowledged":
-            result.state = "acknowledged"
-        elif verdict == "rejected":
-            result.state = "rejected"
-        elif verdict == "service_not_supported":
-            result.state = "service_not_supported"
+        elif verdict == ResponseVerdict.ACKNOWLEDGED:
+            result.state = RequestState.ACKNOWLEDGED
+        elif verdict == ResponseVerdict.REJECTED:
+            result.state = RequestState.REJECTED
+        elif verdict == ResponseVerdict.SERVICE_NOT_SUPPORTED:
+            result.state = RequestState.SERVICE_NOT_SUPPORTED
         else:
-            result.state = "error"
+            result.state = RequestState.ERROR
             result.error = text
 
     def _execute_set(
@@ -725,14 +622,14 @@ class WriteService:
                 result, request, cancel_event=cancel_event, progress=progress
             )
             return
-        result.verification = "not_attempted"
+        result.verification = Verification.NOT_ATTEMPTED
         result.verification_detail = (
             "Read-back verification was disabled for this operation. "
             "The acknowledgement is not proof that the value persisted."
         )
 
     def _execute_reset(self, result: WriteResult) -> None:
-        result.verification = "not_attempted"
+        result.verification = Verification.NOT_ATTEMPTED
         result.verification_detail = (
             "Reset acknowledgement is not proof of completion. Use the read-only "
             "post-check when the device is reachable."
@@ -874,22 +771,22 @@ class WriteService:
         if get_result.identity is not None:
             result.after_identity = get_result.identity
 
-        if get_result.state == "cancelled":
-            result.verification = "unknown"
+        if get_result.state == RequestState.CANCELLED:
+            result.verification = Verification.UNKNOWN
             result.verification_detail = "Read-back was cancelled."
             return
-        if get_result.state == "service_not_supported":
-            result.verification = "service_not_supported"
+        if get_result.state == RequestState.SERVICE_NOT_SUPPORTED:
+            result.verification = Verification.SERVICE_NOT_SUPPORTED
             result.verification_detail = "Device reports Get as unsupported."
             return
-        if get_result.state != "response_received":
-            result.verification = "unknown"
+        if get_result.state != RequestState.RESPONSE_RECEIVED:
+            result.verification = Verification.UNKNOWN
             result.verification_detail = (
                 f"No matching read-back response ({get_result.outcome_text})."
             )
             return
         if get_result.block_errors:
-            result.verification = "rejected"
+            result.verification = Verification.REJECTED
             result.verification_detail = get_result.block_error_text
             return
 
@@ -902,12 +799,12 @@ class WriteService:
             None,
         )
         if block is None:
-            result.verification = "unknown"
+            result.verification = Verification.UNKNOWN
             result.verification_detail = "Read-back response contained no matching block."
             return
         observed = block.value.rstrip(b"\x00") if request.kind == "set_name" else block.value
         if observed == expected:
-            result.verification = "verified"
+            result.verification = Verification.VERIFIED
             if request.kind == "set_name":
                 result.verification_detail = f"Read-back NameOfStation={request.name!r}."
             else:
@@ -916,7 +813,7 @@ class WriteService:
                     f"gw {request.gateway or '0.0.0.0'}."
                 )
         else:
-            result.verification = "mismatch"
+            result.verification = Verification.MISMATCH
             if request.kind == "set_name":
                 result.verification_detail = (
                     "Read-back NameOfStation="
@@ -959,7 +856,7 @@ class WriteService:
         result.transactions.extend(discovery.transactions)
         result.transactions.sort(key=lambda record: record.timestamp)
         if discovery.cancelled:
-            result.post_check_state = "cancelled"
+            result.post_check_state = PostCheckState.CANCELLED
             result.post_check_detail = "Post-check was cancelled by the user."
             return result
         target = next(
@@ -971,19 +868,45 @@ class WriteService:
             None,
         )
         if target is None:
-            result.post_check_state = "no_response"
+            result.post_check_state = PostCheckState.NO_RESPONSE
             result.post_check_detail = (
                 "No unicast Identify response after the reset. The device may still be "
                 "rebooting; this is outcome unknown and not proof of failure."
             )
             return result
-        result.post_check_state = "responded"
+        result.post_check_state = PostCheckState.RESPONDED
         result.after_identity = target
         result.post_check_detail = (
             "Device answered a read-only unicast Identify after the reset. This proves "
             "reachability only; verify the expected name/IP scope independently."
         )
         return result
+
+
+def _wrong_block_detail(pending: _PendingWrite, frame: DcpFrame) -> str | None:
+    """Return why a Control/Response belongs to another block, or ``None``.
+
+    Control/Response carries the involved option/sub-option. If both are
+    present and do not match the single block we sent, this is not our
+    operation even if the Xid collides.
+    """
+    for block in frame.blocks:
+        if (
+            block.option == int(Option.CONTROL)
+            and block.suboption == int(ControlSubOption.RESPONSE)
+            and block.error_option is not None
+            and block.error_suboption is not None
+            and (
+                block.error_option != pending.expected_option
+                or block.error_suboption != pending.expected_suboption
+            )
+        ):
+            return (
+                "Set response refers to option/sub-option "
+                f"0x{block.error_option:02x}/0x{block.error_suboption:02x}, "
+                "not the requested block"
+            )
+    return None
 
 
 def _operation_shape(request: WriteRequest) -> tuple[str, int, int]:

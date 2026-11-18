@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import threading
 
 from PySide6.QtCore import Qt
@@ -24,12 +23,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...html_render import esc
 from ...model import DeviceIdentity, DiscoveryResult, GetResult, WriteResult, iso_utc
 from ...services.get import GET_PRESETS, GetConfig, selector_name
 from ...utils import hexdump, pretty_json
 from ..presentation import device_summary_html, get_result_html
 from ..workers import GetWorker, SignalWorker
-from .common import banner, mono_font
+from .common import apply_mono_font, banner
 from .common import display_addr_text as _display_addr
 from .common import table_item as _item
 
@@ -132,7 +132,7 @@ class DeviceTabMixin:
         hex_layout = QVBoxLayout(hex_group)
         self.detail_hex = QPlainTextEdit()
         self.detail_hex.setReadOnly(True)
-        self.detail_hex.setFont(mono_font())
+        apply_mono_font(self.detail_hex)
         self.detail_hex.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         hex_layout.addWidget(self.detail_hex)
 
@@ -186,7 +186,7 @@ class DeviceTabMixin:
         )
         self.get_cancel = threading.Event()
         worker = GetWorker(
-            self.get_service,
+            self.controller,
             target.mac,
             cfg,
             self.get_cancel,
@@ -198,8 +198,8 @@ class DeviceTabMixin:
         worker.finished.connect(self._on_get_thread_finished)
         self.get_worker = worker
         self.get_result_label.setText(
-            f"Reading <b>{html.escape(preset.label)}</b> from "
-            f"<code>{html.escape(target.mac)}</code>…"
+            f"Reading <b>{esc(preset.label)}</b> from "
+            f"<code>{esc(target.mac)}</code>…"
         )
         self.event_log.info(
             "get.start",
@@ -221,7 +221,7 @@ class DeviceTabMixin:
         self.event_log.warning("get.cancel", "Get cancellation requested by user")
 
     def _on_get_progress(self, message: str) -> None:
-        self.get_result_label.setText(html.escape(message))
+        self.get_result_label.setText(esc(message))
 
     def _on_get_finished(self, result: GetResult) -> None:
         self.latest_get_result = result
@@ -275,7 +275,7 @@ class DeviceTabMixin:
 
     def _on_get_failed(self, message: str) -> None:
         self.get_result_label.setText(
-            f"<span style='color:#8c1d12'><b>Get failed.</b> {html.escape(message)}</span>"
+            f"<span style='color:#8c1d12'><b>Get failed.</b> {esc(message)}</span>"
         )
         self.event_log.error("get.failed", message)
         QMessageBox.critical(self, "Get failed", message)
@@ -291,13 +291,7 @@ class DeviceTabMixin:
         return get_result_html(result)
 
     def _ingest_result(self, result: DiscoveryResult) -> None:
-        for device in result.devices:
-            key = (device.interface_id, device.mac)
-            existing = self.device_cache.get(key)
-            if existing is None:
-                self.device_cache[key] = device
-            else:
-                existing.merge(device, count_as_duplicate=False)
+        self.controller.ingest_devices(result.devices)
 
     def _devices_for_current_interface(self) -> list[DeviceIdentity]:
         if self.current_interface is None:
@@ -376,6 +370,8 @@ class DeviceTabMixin:
         self.selected_device = device
         has_device = device is not None
         self._sync_config_target()
+        # The Test Runner's device under test follows the device-table selection.
+        self._refresh_dut_combo()
         self.copy_mac_button.setEnabled(has_device)
         self.copy_json_button.setEnabled(has_device)
         self.unicast_identify_button.setEnabled(
@@ -536,7 +532,7 @@ class DeviceTabMixin:
         target = self.selected_device
         self.signal_cancel = threading.Event()
         worker = SignalWorker(
-            self.signal_service,
+            self.controller,
             target.mac,
             timeout_s=self.timeout_spin.value(),
             vlan_id=self.vlan_spin.value() or None,
@@ -558,7 +554,7 @@ class DeviceTabMixin:
         worker.start()
 
     def _on_signal_progress(self, message: str) -> None:
-        self.signal_result_label.setText(html.escape(message))
+        self.signal_result_label.setText(esc(message))
 
     def _on_signal_finished(self, result: WriteResult) -> None:
         self._append_transaction_rows(result.transactions)
@@ -580,7 +576,7 @@ class DeviceTabMixin:
     def _on_signal_failed(self, message: str) -> None:
         self.signal_result_label.setText(
             f"<span style='color:#8c1d12'><b>Signal failed.</b> "
-            f"{html.escape(message)}</span>"
+            f"{esc(message)}</span>"
         )
         self.event_log.error("signal.failed", message)
         self._update_config_controls()

@@ -12,21 +12,11 @@ import platform as _platform
 import sys
 from pathlib import Path
 
-from .base import InterfaceInfo
-
-MOCK_INTERFACE_ID = "mock:demo0"
-MOCK_INTERFACE = InterfaceInfo(
-    id=MOCK_INTERFACE_ID,
-    name="demo0",
-    description="Demo (mock) — offline simulated PROFINET segment",
-    mac="02:00:00:00:00:01",
-    ipv4_addresses=("192.0.2.10",),
-    is_up=True,
-    is_running=True,
-    is_virtual=True,
-    kind="mock",
-    detail="No hardware traffic. Used for GUI demonstration and automated tests.",
-)
+# Re-exported for compatibility: these moved to the domain module
+# ``dcpstudio.interfaces`` so pure modules need not import the transport layer.
+from ..interfaces import MOCK_INTERFACE as MOCK_INTERFACE
+from ..interfaces import MOCK_INTERFACE_ID as MOCK_INTERFACE_ID
+from ..interfaces import InterfaceInfo as InterfaceInfo
 
 _VIRTUAL_PREFIXES = (
     "veth",

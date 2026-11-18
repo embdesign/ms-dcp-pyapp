@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import html
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -18,9 +16,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...codec import request_qualifier
 from ...constants import RESET_MODES, SUPPORTED_RESET_MODES
-from .common import LEGACY_RESET_CHOICE, banner, table_item
+from ...html_render import esc
+from ...operations import reset_mode_spec
+from .common import LEGACY_RESET_CHOICE, banner, scrollable, table_item
+
+# The mode table keeps its own scrollbars, but a squeezed pane used to leave
+# only two rows visible. Four rows plus the header stay readable; the page
+# scrolls when the window is shorter than that.
+RESET_TABLE_MIN_HEIGHT = 200
 
 
 class ResetTabMixin:
@@ -58,7 +62,7 @@ class ResetTabMixin:
             meaning = RESET_MODES.get(mode, "Unknown mode")
             self.reset_mode_combo.addItem(
                 f"Mode {mode} — {meaning} "
-                f"(qualifier 0x{request_qualifier('reset', reset_mode=mode):04x})",
+                f"(qualifier {reset_mode_spec(mode).qualifier})",
                 mode,
             )
         index = self.reset_mode_combo.findData(8)
@@ -82,6 +86,7 @@ class ResetTabMixin:
         )
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table.verticalHeader().setVisible(False)
+        table.setMinimumHeight(RESET_TABLE_MIN_HEIGHT)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
         for row, (mode, meaning) in enumerate(sorted(RESET_MODES.items())):
@@ -89,7 +94,7 @@ class ResetTabMixin:
             table.setItem(
                 row,
                 1,
-                table_item(f"0x{request_qualifier('reset', reset_mode=mode):04x}", mono=True),
+                table_item(reset_mode_spec(mode).qualifier, mono=True),
             )
             table.setItem(row, 2, table_item(meaning))
             table.setItem(
@@ -152,7 +157,7 @@ class ResetTabMixin:
         notes.setStyleSheet("color: #475569;")
         layout.addWidget(notes)
         self._update_reset_mode()
-        return tab
+        return scrollable(tab)
 
     def _update_reset_mode(self, *_args) -> None:
         mode = self.reset_mode_combo.currentData()
@@ -176,7 +181,7 @@ class ResetTabMixin:
             8: "Reset all stored data to factory values; vendor-dependent scope.",
         }.get(mode, "Documented scope is incomplete.")
         self.reset_mode_description.setText(
-            f"<b>Qualifier 0x{request_qualifier('reset', reset_mode=mode):04x}</b> · "
-            f"{html.escape(meaning)}. "
-            f"{html.escape(scope)} Device support is not guaranteed."
+            f"<b>Qualifier {reset_mode_spec(mode).qualifier}</b> · "
+            f"{esc(meaning)}. "
+            f"{esc(scope)} Device support is not guaranteed."
         )

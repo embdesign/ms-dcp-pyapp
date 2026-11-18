@@ -95,7 +95,7 @@ Option (1) | SubOption (1) | BlockLength (2) | BlockInfo/Qualifier (2) | Value (
 p-net implements this as `temp = ((qualifier & 1) == 0)`. Temporary vs.
 permanent affects non-volatile storage and may affect behavior after power
 cycle. The application sends these values only behind configuration mode,
-per-operation confirmation and fresh target revalidation.
+an explicit confirmation and fresh target revalidation.
 
 ### 3.4 BlockQualifier for ResetToFactorySettings (`05/06`)
 

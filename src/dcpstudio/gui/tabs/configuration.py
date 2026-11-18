@@ -15,15 +15,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .common import banner
+from .common import banner, scrollable
 
 
 class ConfigurationTabMixin:
     def _build_config_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
         layout.addWidget(
             banner(
                 "<b>Guarded configuration.</b> No Set frame is sent until configuration "
@@ -148,4 +148,4 @@ class ConfigurationTabMixin:
         layout.addLayout(config_actions)
         layout.addWidget(self.config_result_label)
         layout.addStretch(1)
-        return tab
+        return scrollable(tab)

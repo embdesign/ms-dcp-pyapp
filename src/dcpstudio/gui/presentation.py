@@ -10,10 +10,10 @@ is unchanged.
 
 from __future__ import annotations
 
-import html
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from ..html_render import esc, joined, li_items
 from ..model import DeviceIdentity, GetResult, WriteResult, iso_utc
 from ..services.get import selector_name
 
@@ -39,11 +39,11 @@ def get_result_html(result: GetResult) -> str:
     else:
         color = _COLOR_ERROR
     blocks = ", ".join(
-        html.escape(selector_name((b.option, b.suboption))) for b in result.blocks
+        esc(selector_name((b.option, b.suboption))) for b in result.blocks
     )
     parts = [
-        f"<span style='color:{color}'><b>{html.escape(result.outcome_text)}</b></span>"
-        f" · target <code>{html.escape(result.target_mac)}</code>"
+        f"<span style='color:{color}'><b>{esc(result.outcome_text)}</b></span>"
+        f" · target <code>{esc(result.target_mac)}</code>"
         f" · Xid <code>0x{result.xid:08x}</code>"
     ]
     if result.rtt_ms is not None:
@@ -53,12 +53,10 @@ def get_result_html(result: GetResult) -> str:
     if result.block_errors:
         parts.append(
             f"<br><span style='color:{_COLOR_ERROR}'><b>Block errors:</b> "
-            f"{html.escape(result.block_error_text)}</span>"
+            f"{esc(result.block_error_text)}</span>"
         )
     if result.warnings:
-        parts.append(
-            "<br><b>Notes:</b> " + "; ".join(html.escape(w) for w in result.warnings)
-        )
+        parts.append("<br><b>Notes:</b> " + joined(result.warnings))
     return "".join(parts)
 
 
@@ -74,12 +72,10 @@ def signal_result_html(result: WriteResult) -> str:
     """
     if result.state == "acknowledged":
         color = _COLOR_OK
-        headline = (
-            f"Signal acknowledged by <code>{html.escape(result.target_mac)}</code>"
-        )
+        headline = f"Signal acknowledged by <code>{esc(result.target_mac)}</code>"
     elif result.state in ("no_response", "late_response", "cancelled"):
         color = _COLOR_WARN
-        headline = html.escape(result.outcome_text)
+        headline = esc(result.outcome_text)
     elif result.state == "rejected":
         color = _COLOR_ERROR
         headline = "Device rejected the Signal"
@@ -95,13 +91,13 @@ def signal_result_html(result: WriteResult) -> str:
 
     facts: list[str] = []
     if result.state == "blocked" and result.error:
-        facts.append(html.escape(result.error))
+        facts.append(esc(result.error))
     elif result.state in ("rejected", "service_not_supported", "error") and result.error:
-        facts.append(html.escape(result.error))
+        facts.append(esc(result.error))
     if result.block_error is not None:
         facts.append(
             f"block error <code>0x{result.block_error:02x}</code> "
-            f"{html.escape(result.block_error_text)}"
+            f"{esc(result.block_error_text)}"
         )
     if result.rtt_ms is not None:
         facts.append(f"RTT {result.rtt_ms:.1f} ms")
@@ -118,9 +114,7 @@ def signal_result_html(result: WriteResult) -> str:
             "before signalling again."
         )
     if result.warnings and result.state != "no_response":
-        parts.append(
-            "<br><b>Notes:</b> " + "; ".join(html.escape(w) for w in result.warnings)
-        )
+        parts.append("<br><b>Notes:</b> " + joined(result.warnings))
     return "".join(parts)
 
 
@@ -146,9 +140,9 @@ def write_result_html(result: WriteResult) -> str:
         else ""
     )
     parts = [
-        f"<span style='color:{color}'><b>{html.escape(result.outcome_text)}</b></span>"
-        f" · {html.escape(result.operation_text)}"
-        f" · target <code>{html.escape(result.target_mac)}</code>"
+        f"<span style='color:{color}'><b>{esc(result.outcome_text)}</b></span>"
+        f" · {esc(result.operation_text)}"
+        f" · target <code>{esc(result.target_mac)}</code>"
         f" · Xid <code>0x{result.xid:08x}</code>{qualifier}"
     ]
     if result.rtt_ms is not None:
@@ -156,27 +150,25 @@ def write_result_html(result: WriteResult) -> str:
     if result.block_error is not None:
         parts.append(
             f"<br><b>Block error:</b> 0x{result.block_error:02x} "
-            f"{html.escape(result.block_error_text)}"
+            f"{esc(result.block_error_text)}"
         )
     parts.append(
         f"<br><b>Independent verification:</b> "
-        f"<span style='color:{color}'>{html.escape(result.verification_text)}</span>"
+        f"<span style='color:{color}'>{esc(result.verification_text)}</span>"
     )
     if result.post_check_state != "not_attempted":
         parts.append(
-            f"<br><b>Post-check ({html.escape(result.post_check_state)}):</b> "
-            f"{html.escape(result.post_check_detail)}"
+            f"<br><b>Post-check ({esc(result.post_check_state)}):</b> "
+            f"{esc(result.post_check_detail)}"
         )
     if result.warnings:
-        parts.append(
-            "<br><b>Notes:</b> " + "; ".join(html.escape(w) for w in result.warnings)
-        )
+        parts.append("<br><b>Notes:</b> " + joined(result.warnings))
     return "".join(parts)
 
 
 def device_summary_html(device: DeviceIdentity) -> str:
     """Identity table shown on the Device Details tab."""
-    warnings = "".join(f"<li>{html.escape(w)}</li>" for w in device.warnings)
+    warnings = li_items(device.warnings)
     rows = [
         ("MAC address", device.mac),
         ("Interface", device.interface_id),
@@ -219,8 +211,8 @@ def device_summary_html(device: DeviceIdentity) -> str:
         ("Last Xid", f"0x{device.last_xid:08x}" if device.last_xid is not None else "—"),
     ]
     table = "".join(
-        f"<tr><td style='color:{_COLOR_MUTED};padding:3px 12px 3px 0'>{html.escape(k)}</td>"
-        f"<td style='font-weight:600;padding:3px 0'>{html.escape(str(v))}</td></tr>"
+        f"<tr><td style='color:{_COLOR_MUTED};padding:3px 12px 3px 0'>{esc(k)}</td>"
+        f"<td style='font-weight:600;padding:3px 0'>{esc(v)}</td></tr>"
         for k, v in rows
     )
     ip_info = ""
@@ -258,18 +250,18 @@ def report_preview_html(
     """Session summary shown on the Logs & Reports tab."""
     device_rows = (
         "".join(
-            f"<tr><td>{html.escape(d.mac)}</td><td>{html.escape(d.display_name)}</td>"
-            f"<td>{html.escape(d.ip_text)}</td><td>{html.escape(d.vendor_device_text)}</td></tr>"
+            f"<tr><td>{esc(d.mac)}</td><td>{esc(d.display_name)}</td>"
+            f"<td>{esc(d.ip_text)}</td><td>{esc(d.vendor_device_text)}</td></tr>"
             for d in devices
         )
         or f"<tr><td colspan='4' style='color:{_COLOR_MUTED}'>No devices discovered.</td></tr>"
     )
-    limitation_items = "".join(f"<li>{html.escape(x)}</li>" for x in limitations)
+    limitation_items = li_items(limitations)
     return (
         "<style>table{width:100%;border-collapse:collapse}td{padding:5px;border-bottom:1px solid #dbe4ee}"
         "li{margin:4px 0}</style>"
         "<h2>Session summary</h2>"
-        f"<p><b>Interface:</b> {html.escape(interface_name or 'none')}<br>"
+        f"<p><b>Interface:</b> {esc(interface_name or 'none')}<br>"
         f"<b>Capture frames:</b> {capture_total}<br>"
         f"<b>Devices:</b> {len(devices)}<br>"
         f"<b>Read-only Get operations:</b> {get_count}<br>"
@@ -282,7 +274,7 @@ def report_preview_html(
         f"<th>Vendor/Device</th></tr>{device_rows}</table>"
         f"<h3>Known limitations</h3><ul>{limitation_items}</ul>"
         f"<p style='color:{_COLOR_ERROR}'><b>Sensitive data:</b> "
-        f"{html.escape(sensitive_warning)}</p>"
+        f"{esc(sensitive_warning)}</p>"
     )
 
 

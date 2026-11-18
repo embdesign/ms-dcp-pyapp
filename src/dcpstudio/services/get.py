@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from ..codec import build_get_request, extract_device_identity, new_xid, parse_frame
@@ -26,7 +26,9 @@ from ..constants import (
     ServiceType,
 )
 from ..model import DcpFrame, GetResult, TransactionRecord, iso_utc, utc_now
+from ..outcomes import RequestState, TransactionOutcome
 from ..transport.base import CaptureNotStarted, DcpTransport, TransportError
+from .correlation import PendingRequest, decide_frame, wait_for_response
 from .discovery import LATE_RESPONSE_GRACE_S
 from .rate_limit import RequestRateLimiter
 
@@ -113,24 +115,6 @@ class GetConfig:
     min_request_interval_s: float = DEFAULT_MIN_REQUEST_INTERVAL_S
 
 
-@dataclass(slots=True)
-class _PendingGet:
-    xid: int
-    target_mac: str
-    deadline_monotonic: float
-    request_monotonic: float
-    request_tx_utc: datetime
-    selectors: tuple[tuple[int, int], ...]
-    response: DcpFrame | None = None
-    response_timestamp: datetime | None = None
-    rtt_ms: float | None = None
-    late: bool = False
-    duplicate_responses: int = 0
-    unmatched_responses: int = 0
-    transactions: list[TransactionRecord] = field(default_factory=list)
-    response_event: threading.Event = field(default_factory=threading.Event)
-
-
 class GetService:
     """One-shot read-only Get dispatcher.
 
@@ -149,7 +133,7 @@ class GetService:
         self.limiter = limiter or RequestRateLimiter()
         self.event_log = event_log
         self._lock = threading.Lock()
-        self._pending: _PendingGet | None = None
+        self._pending: PendingRequest | None = None
 
     @property
     def has_pending(self) -> bool:
@@ -163,7 +147,7 @@ class GetService:
             except Exception:
                 pass
 
-    def _record(self, pending: _PendingGet, **kwargs) -> None:
+    def _record(self, pending: PendingRequest, **kwargs) -> None:
         pending.transactions.append(TransactionRecord(**kwargs))
 
     # ------------------------------------------------------------- callbacks
@@ -171,11 +155,8 @@ class GetService:
         if direction != "rx":
             return
         with self._lock:
-            pending = self._pending
-            if pending is None:
+            if self._pending is None:
                 return
-            xid = pending.xid
-            target = pending.target_mac
 
         frame = parse_frame(raw, captured_at=timestamp, interface_id=self.transport.interface.id)
         if (
@@ -188,107 +169,48 @@ class GetService:
             return
 
         local_mac = (self.transport.interface.mac or "").lower()
-        if local_mac and frame.dst_mac and frame.dst_mac.lower() not in (
-            local_mac,
-            "ff:ff:ff:ff:ff:ff",
-        ):
-            with self._lock:
-                pending = self._pending
-                if pending is not None and frame.xid == pending.xid:
-                    pending.unmatched_responses += 1
-                    self._record(
-                        pending,
-                        timestamp=timestamp,
-                        event="get_response",
-                        interface_id=self.transport.interface.id,
-                        outcome="unrelated_response_ignored",
-                        detail=f"Get response destination {frame.dst_mac} is not this interface",
-                        xid=frame.xid,
-                        service="Get",
-                        peer_mac=frame.src_mac,
-                        frame_id=frame.frame_id,
-                        raw_hex=frame.raw.hex(),
-                    )
-            return
-
         with self._lock:
             pending = self._pending
             if pending is None:
                 return
-            if frame.xid != xid:
-                pending.unmatched_responses += 1
-                self._record(
-                    pending,
-                    timestamp=timestamp,
-                    event="get_response",
-                    interface_id=self.transport.interface.id,
-                    outcome="unrelated_response_ignored",
-                    detail=f"Get response Xid 0x{(frame.xid or 0):08x} does not match request",
-                    xid=frame.xid,
-                    service="Get",
-                    peer_mac=frame.src_mac,
-                    frame_id=frame.frame_id,
-                    raw_hex=frame.raw.hex(),
-                )
-                return
-            if (frame.src_mac or "").lower() != target.lower():
-                pending.unmatched_responses += 1
-                self._record(
-                    pending,
-                    timestamp=timestamp,
-                    event="get_response",
-                    interface_id=self.transport.interface.id,
-                    outcome="unrelated_response_ignored",
-                    detail=f"Get target was {target}, response came from {frame.src_mac}",
-                    xid=xid,
-                    service="Get",
-                    peer_mac=frame.src_mac,
-                    frame_id=frame.frame_id,
-                    raw_hex=frame.raw.hex(),
-                )
-                return
-            if pending.response is not None:
-                pending.duplicate_responses += 1
-                self._record(
-                    pending,
-                    timestamp=timestamp,
-                    event="get_response",
-                    interface_id=self.transport.interface.id,
-                    outcome="duplicate_response_ignored",
-                    detail="A Get response was already received for this Xid",
-                    xid=xid,
-                    service="Get",
-                    peer_mac=frame.src_mac,
-                    frame_id=frame.frame_id,
-                    raw_hex=frame.raw.hex(),
-                )
+            decision = decide_frame(
+                pending,
+                frame,
+                timestamp,
+                interface_id=self.transport.interface.id,
+                local_mac=local_mac,
+                label="Get",
+                service="Get",
+                event="get_response",
+                duplicate_detail="A Get response was already received for this Xid",
+            )
+            if decision is not None:
                 return
 
-            rtt_ms = max(0.0, (time.monotonic() - pending.request_monotonic) * 1000.0)
-            late = time.monotonic() > pending.deadline_monotonic
-            pending.response = frame
-            pending.response_timestamp = timestamp
-            pending.rtt_ms = round(rtt_ms, 3)
-            pending.late = late
             block_errors = self._block_errors(frame)
+            pending.mark_response(frame, timestamp)
             self._record(
                 pending,
                 timestamp=timestamp,
                 event="get_response",
                 interface_id=self.transport.interface.id,
-                outcome="late_response" if late else "matching_response_received",
+                outcome=(
+                    TransactionOutcome.LATE_RESPONSE
+                    if pending.late
+                    else TransactionOutcome.MATCHING_RESPONSE_RECEIVED
+                ),
                 detail=(
                     f"{len(frame.blocks)} block(s), {len(block_errors)} block error(s), "
                     f"service type 0x{frame.service_type:02x}"
                 ),
-                xid=xid,
+                xid=pending.xid,
                 service="Get",
                 peer_mac=frame.src_mac,
                 frame_id=frame.frame_id,
-                rtt_ms=round(rtt_ms, 3),
+                rtt_ms=pending.rtt_ms,
                 raw_hex=frame.raw.hex(),
             )
-            pending.response_event.set()
+            pending.notify_response()
 
     @staticmethod
     def _block_errors(frame: DcpFrame):
@@ -340,7 +262,7 @@ class GetService:
                 finished_at=finished,
                 timeout_s=cfg.timeout_s,
                 vlan_id=cfg.vlan_id,
-                state="cancelled",
+                state=RequestState.CANCELLED,
                 cancelled=True,
                 warnings=["Cancelled before the Get request was transmitted"],
             )
@@ -358,13 +280,12 @@ class GetService:
             raise TransportError(f"Could not encode Get request: {exc}") from exc
 
         now_mono = time.monotonic()
-        pending = _PendingGet(
+        pending = PendingRequest(
             xid=xid,
             target_mac=target_mac,
             deadline_monotonic=now_mono + float(cfg.timeout_s),
             request_monotonic=now_mono,
             request_tx_utc=utc_now(),
-            selectors=selectors,
         )
         with self._lock:
             if self._pending is not None:
@@ -387,7 +308,7 @@ class GetService:
                 finished_at=finished,
                 timeout_s=cfg.timeout_s,
                 vlan_id=cfg.vlan_id,
-                state="error",
+                state=RequestState.ERROR,
                 request_frame_hex=request_hex,
                 error=message,
                 warnings=["No frame is reported as transmitted"],
@@ -400,7 +321,7 @@ class GetService:
                 timestamp=pending.request_tx_utc,
                 event="get_request",
                 interface_id=interface.id,
-                outcome="transmitted",
+                outcome=TransactionOutcome.TRANSMITTED,
                 detail=(
                     f"Get {len(selectors)} block(s): "
                     + ", ".join(selector_name(s) for s in selectors)
@@ -418,30 +339,21 @@ class GetService:
             {"xid": xid, "target": target_mac, "selectors": [selector_name(s) for s in selectors]},
         )
 
-        last_progress = 0.0
-        while True:
-            if pending.response_event.wait(0.05):
-                break
-            if cancel_event.is_set():
-                break
-            now = time.monotonic()
-            if now > pending.deadline_monotonic + LATE_RESPONSE_GRACE_S:
-                break
-            if progress and pending.response is None and (now - last_progress) > 0.25:
-                last_progress = now
-                remaining = max(0.0, pending.deadline_monotonic - now)
-                progress(f"Waiting for Get response… {remaining:.1f} s remaining")
+        wait_for_response(
+            pending,
+            cancel_event,
+            grace_s=LATE_RESPONSE_GRACE_S,
+            progress=progress,
+            progress_text=lambda remaining: (
+                f"Waiting for Get response… {remaining:.1f} s remaining"
+            ),
+        )
 
         cancelled = cancel_event.is_set()
         with self._lock:
             self._pending = None
             response = pending.response
-            # Windows' clock granularity can make the request and a fast
-            # response share a timestamp, so break ties by event kind.
-            transactions = sorted(
-                pending.transactions,
-                key=lambda t: (t.timestamp, 0 if t.outcome == "transmitted" else 1),
-            )
+            transactions = pending.ordered_transactions()
             unmatched = pending.unmatched_responses
             duplicate = pending.duplicate_responses
 
@@ -455,13 +367,13 @@ class GetService:
         )
 
         if response is None:
-            state = "cancelled" if cancelled else "no_response"
+            state = RequestState.CANCELLED if cancelled else RequestState.NO_RESPONSE
         elif response.service_type == int(ServiceType.RESPONSE_NOT_SUPPORTED):
-            state = "service_not_supported"
+            state = RequestState.SERVICE_NOT_SUPPORTED
         elif pending.late:
-            state = "late_response"
+            state = RequestState.LATE_RESPONSE
         else:
-            state = "response_received"
+            state = RequestState.RESPONSE_RECEIVED
 
         warnings: list[str] = []
         if state == "no_response":
@@ -474,7 +386,7 @@ class GetService:
                     timestamp=finished,
                     event="get_timeout",
                     interface_id=interface.id,
-                    outcome="outcome_unknown",
+                    outcome=TransactionOutcome.OUTCOME_UNKNOWN,
                     detail="No matching Get response within the configured window",
                     xid=xid,
                     service="Get",

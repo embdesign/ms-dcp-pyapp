@@ -17,9 +17,10 @@ Read this before changing code. It records only facts verified in this tree.
 
 ```bash
 uv sync                                     # create .venv + dev group
-uv run pytest                               # full suite (offscreen Qt, 181 tests, ~70 s)
+uv run pytest                               # full suite (offscreen Qt, 254 tests)
 uv run pytest --cov=dcpstudio --cov-report=term-missing
 uv run ruff check src tests tools           # configured lint gate (clean)
+uv run mypy                                 # typed gate for the pure modules (clean)
 uv run dcp-studio                           # launch GUI
 uv run dcp-cli --help                       # headless CLI (also python -m dcpstudio COMMAND)
 uv run dcp-cli interfaces                   # list interfaces ('demo'/'demo0' = offline mock)
@@ -46,7 +47,29 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
 - `codec.py` is pure encode/decode: no I/O, no timing, no UI. Transport-agnostic.
 - All raw I/O goes through the `DcpTransport` protocol
   (`transport/base.py`); `ScapyTransport`, `MockTransport` and offline fixtures
-  are interchangeable behind it.
+  are interchangeable behind it. Interface/readiness data types live in the
+  domain module `interfaces.py`; `transport/base.py` and
+  `transport/interfaces.py` re-export them for compatibility — do not move them
+  back into the transport package.
+- **One composition root.** `session.build_services()` / `open_session()` /
+  `probe_readiness()` in `session.py` are the only places that construct a
+  transport or the discovery/Get/Write/Signal services. The GUI, `cli.py` and
+  `testrunner/runner.py` must not rebuild that wiring. `tests/test_layer_boundaries.py`
+  enforces this and the rest of the layering; add new exceptions to its
+  documented allowlist, never by loosening a rule.
+- **One correlation primitive.** Response correlation goes through
+  `services/correlation.py` (`PendingRequest`, `decide_frame()`,
+  `wait_for_response()`, `collect_until_deadline()`). Services keep only their
+  matching policy and transaction text; never reintroduce a per-service pending
+  dataclass, duplicate/unmatched bookkeeping or wait loop.
+- **One outcome vocabulary.** Result states, verification, post-check and
+  transaction outcomes are the `StrEnum`s in `outcomes.py`, and their display
+  text lives in the same module. Never assign a result-state string literal
+  elsewhere; the JSON/report representation is the enum value. `TestResult.status`
+  is a separate test-verdict vocabulary.
+- **One HTML path.** Escaping and table markup live in `html_render.py`
+  (`esc`, `cell`, `row`, `empty_row`, `li_items`, `joined`). `reporting.py` and
+  every GUI module use it; do not call `html.escape` directly.
 - Verified protocol values live only in `constants.py`. Never invent a constant,
   qualifier or Option/Sub-option. New wire facts must be corroborated in
   `docs/references.md` first.
@@ -62,6 +85,20 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   parameter dicts into a caller. The wire BlockQualifier comes from
   `codec.request_qualifier()`, which the encoders also use; do not recompute
   `mode << 1` anywhere.
+- The Test Runner validates a **declared device under test**. `DEVICE_VALIDATION_SUITE`
+  and `FULL_VALIDATION_SUITE` in `testrunner/cases.py` include `write.set_name`,
+  `write.set_ip` and `write.reset`, because a device is not validated until those
+  have been attempted; the read-only checks run first and the reset is last.
+  There is **one** declaration per run (the DUT selector plus the run button),
+  not a modal dialog per operation: `_run_tests` passes the same
+  `WriteAuthorization` to every selected write test, uses only the declared DUT
+  (or the selected device row) as the target, and logs `safety.dut_declared`
+  with the parameters. Everything else stays gated: configuration mode is
+  required, targets are one unicast device, each frame is single-shot with a
+  fresh revalidation inside `WriteService` and a read-back, there is no retry or
+  rollback, and a cancelled in-flight write is `outcome_unknown`.
+  `DEVICE_READ_ONLY_SUITE` and `TOOL_SELF_TEST_SUITE` must never contain a
+  `write.*` test, and `dcp-cli tests` still refuses them.
 - Reset modes 3 and 9 stay refused by the encoder (unverified semantics).
   Legacy FactoryReset (`05/05`) **is** implemented: BlockQualifier `0x0000`,
   full reset, no mode field, through the same gate.
@@ -95,7 +132,10 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   the event log and the HTML report. Never introduce delivery-phase numbering in
   an ID. The handler method is derived from the ID:
   `getattr(self, f"_test_{case.test_id.replace('.', '_')}")`, so an ID and its
-  `_test_*` method must be renamed together.
+  `_test_*` method must be renamed together. Handlers live in
+  `testrunner/handlers/<namespace>.py` (one mixin per namespace that `TestRunner`
+  inherits); `tests/test_testrunner_handlers.py` enforces both the ID→handler
+  resolution and the namespace placement.
 - Operator-visible text (window title, header badge, report header) carries the
   version and capability, not a delivery-phase number. `PHASE` is shown only in
   the About box.
@@ -104,9 +144,9 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
 
 - Do not commit without operator authorization; check `git status` and make
   backups before bulk edits.
-- `dist/` was rebuilt with `uv build` on 2026-11-14 and contains the current
-  `cli.py` and both entry points. Rebuild it after any source change before
-  shipping.
+- `dist/` predates the 2026-11-18/19 refactors; run `uv build` after any source
+  change before shipping. The wheel must contain `cli.py`, `session.py` and both
+  entry points.
 - Windows/Npcap code paths cannot be executed on this Linux host; only the
   monkeypatched unit tests cover them.
 - Live read-only validation is possible without sudo on a dedicated lab NIC: a
@@ -124,8 +164,21 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
 - `fixtures.py` is **runtime data**, not test-only: `testrunner/runner.py` uses
   `FIXTURES`/`get_fixture` for the offline parser tests that ship in the app. Do
   not move it into `tests/` without replacing that dependency first.
-- `gui/main_window.py` is the **shared controller** (transport/service
-  lifecycle, discovery, guarded writes, post-checks, shutdown). Tab construction
-  and tab-local orchestration live in `gui/tabs/<tab>.py` mixins; put new tab
-  widgets/handlers there. `tests/test_gui_orchestration.py` targets controller
-  helpers directly; keep using it instead of adding logic to the window shell.
+- `gui/controller.py` (`SessionController`) owns session state (interface,
+  transport, services, safety gate, device cache, result histories) and the
+  operations `discover` / `read_get` / `signal` / `execute_write` / `post_check`.
+  The service workers in `gui/workers.py` are thin adapters over it.
+  `gui/main_window.py` is the window shell (~380 lines: widgets, menu, status
+  bar, tabs, session-state properties, the per-worker `*_running` predicates,
+  `_service_log`, shutdown); its session-state names are explicit delegated
+  properties over the controller (no `__getattr__` hooks) so the tab mixins keep
+  working. Do not add new state to the window — extend the controller. Tab
+  construction **and** its slot handlers live in `gui/tabs/<tab>.py` mixins
+  (discovery incl. interface lifecycle, capture incl. capture lifecycle,
+  configuration, reset, device, test runner, logs) plus
+  `gui/tabs/write_flow.py` (`WriteFlowMixin`) for the guarded Set/Reset flow,
+  the confirmation hand-off and the reset post-check; put new tab
+  widgets/handlers there, not in the shell.
+  `tests/test_gui_orchestration.py` and `tests/test_gui_controller.py` target
+  controller helpers directly; keep using them instead of adding logic to the
+  window shell.

@@ -2,8 +2,11 @@
 
 These tests are for a **spare device on an isolated Layer-2 segment**. Do not run
 them on a production line or on equipment that is not cleared for interruption.
-Phases 1–2 transmit Identify/Get frames. Phases 3–4 can change name/IP and reset
-the device; they require configuration mode and per-operation confirmation.
+The read-only procedure transmits Identify/Get frames only. The optional
+state-changing procedure can change name/IP and reset the device; it requires
+configuration mode and an explicit confirmation — per operation in the
+Configuration/Reset tabs, or once per run for the device under test declared in
+the Test Runner's device validation suite.
 Start with the read-only tests and have a recovery plan before any write test.
 
 ---
@@ -20,13 +23,14 @@ Start with the read-only tests and have a recovery plan before any write test.
 | Capture filter | `ether proto 0x8892` (plus VLAN if tagged) |
 | Backup | Record the device's current name/IP outside the tool before testing |
 
-Phase 1–2 make **no configuration or reset changes**. Phase 3–4 are guarded and
-optional. Do not improvise a write test outside this procedure; record the
-device's current name/IP and recovery method first.
+The read-only procedure makes **no configuration or reset changes**. The
+state-changing procedure is guarded and optional. Do not improvise a write test
+outside this procedure; record the device's current name/IP and recovery method
+first.
 
 ---
 
-## 2. Test matrix (Phases 1–4)
+## 2. Test matrix (read-only first, state-changing last)
 
 ### L-1 Interface enumeration
 
@@ -120,7 +124,8 @@ device's current name/IP and recovery method first.
 
 ### L-10 Reports
 
-1. Run the safe test suite.
+1. Run the device read-only checks (Test Runner → Preset → Device read-only
+   checks).
 2. Export JSON and HTML.
 3. **Pass:** both contain UTC timestamps, interface, target identity,
    operations, Xids, response timing, statuses, before/after observations,

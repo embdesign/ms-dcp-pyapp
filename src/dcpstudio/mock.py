@@ -1,7 +1,7 @@
 """Offline mock DCP devices and transport.
 
 The mock can apply DCP Set/Reset to its in-memory configuration so the guarded
-Phase 3/4 workflows can be exercised without hardware or privileges. This is a
+Set/Reset workflows can be exercised without hardware or privileges. This is a
 simulation only: no persistent state, reboot timing, vendor-specific reset
 scope, or controller interaction is modelled. ``apply_set=False`` restores the
 older behavior where every Set is rejected with block error 0x05.

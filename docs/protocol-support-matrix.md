@@ -1,8 +1,9 @@
 # Protocol support matrix
 
-Status of every DCP capability in this repository. **Phases 1–4 are implemented;
-state-changing operations are guarded.** "Verified" means the wire layout is
-corroborated by p-net and/or Wireshark, not that every device implements it.
+Status of every DCP capability in this repository. **All listed capabilities
+are implemented as stated; state-changing operations are guarded.** "Verified"
+means the wire layout is corroborated by p-net and/or Wireshark, not that every
+device implements it.
 
 Legend:
 
@@ -46,7 +47,7 @@ Legend:
 | Set IP parameters | ✅ | ✅ | ✅ | ✅ | `01/02`; 12-byte suite; temp/permanent qualifier; read-back Get |
 | ResetToFactorySettings | ✅ | ✅ | ✅ | ✅ | `05/06`; modes 1/2/4/8 only; per-operation confirmation; post-check |
 
-## 3. Configuration (Phase 3, guarded)
+## 3. Configuration (guarded)
 
 | Capability | Wire format | Semantics | Status | Reason |
 |---|---|---|---|---|
@@ -57,7 +58,7 @@ Legend:
 | Multi-block Start/Stop transaction | `05/01` + `05/02` | Global qualifier | ➖ | Not needed for the single-block writes; no multi-block UI |
 | Device signaling / LED | `05/03` | BlockQualifier `0x0000` + SignalValue `0x0100` | ✅ | Implemented as an **unguarded** identification action (no configuration mode; one unicast frame, rate-limited, no retry, no state change). Acknowledged by the lab device; the LED effect itself is not observable over DCP |
 
-## 4. Reset (Phase 4, guarded)
+## 4. Reset (guarded)
 
 | Variant | Wire format | Mode/qualifier | Status | Notes |
 |---|---|---|---|---|
@@ -71,9 +72,10 @@ Legend:
 | Reset and restore | `05/06`, qualifier `0x0012` | mode 9 | ❔ | Not verified; encoder refuses it |
 
 No batch, broadcast, or multi-device reset path exists. Every reset is preceded
-by a fresh unicast Identify and requires per-operation confirmation. Acknowledged resets
-are followed by an optional read-only post-check; acknowledgement is not proof of
-completion.
+by a fresh unicast Identify and requires an explicit confirmation (per operation
+in the Reset tab; once per run for the declared device under test in the Test
+Runner). Acknowledged resets are followed by an optional read-only post-check;
+acknowledgement is not proof of completion.
 
 ## 5. Reporting and testing
 
@@ -87,6 +89,7 @@ completion.
 | HTML report | ✅ | Escaped, dependency-free |
 | Interface/capture readiness tests | ✅ | Read-only |
 | Identify discovery test | ✅ | Inconclusive on no response |
+| Identity block completeness | ✅ | Vendor/device ID and supported options required; missing name/IP reported as a warning |
 | Unicast Identify test | ✅ | Device acceptance varies; inconclusive if unanswered |
 | Before/after identity comparison | ✅ | Read-only or after a guarded write; records name/IP/ID changes |
 | Get request/response test | ✅ | Offline mock and live read-only Get |
@@ -96,7 +99,8 @@ completion.
 | Parser/malformed fixtures | ✅ | Offline only |
 | PCAP roundtrip | ✅ | Offline |
 | Station-name/IP validation | ✅ | Offline |
-| Set/Reset tests | ✅ | Optional; require configuration mode and separate confirmation per operation; one state-changing test per run |
+| Set/Reset tests | ✅ | Part of the device validation and full validation suites; configuration mode plus a declared device under test, one frame per operation, read-back |
+| Grouped test catalogue and read-only suites | ✅ | Categories from `TEST_GROUPS`; the device read-only and tool self-test suites never contain a state-changing test |
 
 ### 5.1 Operator surfaces
 

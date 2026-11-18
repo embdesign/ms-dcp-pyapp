@@ -1,6 +1,6 @@
 """DCP Studio - PROFINET DCP discovery, guarded configuration, and testing.
 
-Phases 1-4 are implemented: read-only discovery/Get plus explicitly enabled,
+The delivered build implements read-only discovery/Get plus explicitly enabled,
 per-operation-confirmed Set NameOfStation, Set IP parameters and verified reset
 variants. See ``docs/protocol-support-matrix.md``.
 """

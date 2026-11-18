@@ -45,6 +45,7 @@ from .constants import (
     ServiceType,
 )
 from .model import DcpBlock, DcpFrame, DeviceIdentity, mac_to_str, utc_now
+from .outcomes import ResponseVerdict
 
 _MAC_RE_BYTES = 6
 
@@ -954,12 +955,13 @@ def identify_filter_name(frame: DcpFrame) -> str | None:
     return value.decode("ascii", errors="replace")
 
 
-def classify_set_response(frame: DcpFrame) -> tuple[str, int | None, str]:
+def classify_set_response(frame: DcpFrame) -> tuple[ResponseVerdict, int | None, str]:
     """Classify a DCP Set response without transmitting anything.
 
     Returns ``(verdict, block_error, text)`` where verdict is one of
     ``acknowledged``, ``rejected``, ``service_not_supported`` or ``unmatched``.
-    This parser is used by offline tests and is the basis for Phase 3/4 guards.
+    This parser is used by offline tests and is the basis for the guarded-write
+    checks.
     """
     if (
         frame.kind != "dcp"
@@ -967,20 +969,24 @@ def classify_set_response(frame: DcpFrame) -> tuple[str, int | None, str]:
         or frame.service_type
         not in (int(ServiceType.RESPONSE_SUCCESS), int(ServiceType.RESPONSE_NOT_SUPPORTED))
     ):
-        return "unmatched", None, "Not a DCP Set response"
+        return ResponseVerdict.UNMATCHED, None, "Not a DCP Set response"
     if frame.service_type == int(ServiceType.RESPONSE_NOT_SUPPORTED):
-        return "service_not_supported", None, "Device reports ServiceID Set as unsupported"
+        return (
+            ResponseVerdict.SERVICE_NOT_SUPPORTED,
+            None,
+            "Device reports ServiceID Set as unsupported",
+        )
     for block in frame.blocks:
         if block.option == int(Option.CONTROL) and block.suboption == int(
             ControlSubOption.RESPONSE
         ):
             error = block.block_error
             if error is None:
-                return "rejected", None, "Malformed Control/Response block"
+                return ResponseVerdict.REJECTED, None, "Malformed Control/Response block"
             if error == 0:
-                return "acknowledged", 0, "Set acknowledged with block error 0"
-            return "rejected", error, block.error_text or f"Block error 0x{error:02x}"
-    return "rejected", None, "Set response contains no Control/Response block"
+                return ResponseVerdict.ACKNOWLEDGED, 0, "Set acknowledged with block error 0"
+            return ResponseVerdict.REJECTED, error, block.error_text or f"Block error 0x{error:02x}"
+    return ResponseVerdict.REJECTED, None, "Set response contains no Control/Response block"
 
 
 def blocks_summary(blocks: Iterable[DcpBlock]) -> str:

@@ -256,12 +256,12 @@ Diagnostics, capture and reporting:
   and known limitations.
 - Request rate limiter shared by all reads and writes; late, duplicate,
   unrelated and truncated responses handled explicitly.
-- 20-case functional test catalogue with a functional ID namespace
+- 21-case functional test catalogue with a functional ID namespace
   (`env.*`, `parser.*`, `protocol.*`, `validation.*`, `write.*`); read-only by
-  default, at most one state-changing test per run.
+  default, with state-changing tests only in the declared-device suites.
 
 Quality gates:
-- `uv run ruff check src tests tools` (explicit rule selection) and
-  `uv run pytest` (181 tests, offscreen Qt) are the required gates.
+- `uv run ruff check src tests tools` (explicit rule selection), `uv run mypy`
+  and `uv run pytest` (offscreen Qt) are the required gates.
 - Verified on an isolated lab segment without recording vendor, model, MAC, IP
   or station identifiers; see `HANDOFF.md`.

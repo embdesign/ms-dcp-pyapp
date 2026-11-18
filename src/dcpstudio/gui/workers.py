@@ -8,11 +8,11 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 from ..model import WriteResult
 from ..pcap_io import analyze_pcap
-from ..services.discovery import DiscoveryConfig, DiscoveryService
-from ..services.get import GetConfig, GetService
-from ..services.signal import SignalService
-from ..services.write import WriteRequest, WriteService
+from ..services.discovery import DiscoveryConfig
+from ..services.get import GetConfig
+from ..services.write import WriteRequest
 from ..testrunner.runner import TestRunner
+from .controller import SessionController
 
 
 class CaptureBridge(QObject):
@@ -30,20 +30,20 @@ class DiscoveryWorker(QThread):
 
     def __init__(
         self,
-        service: DiscoveryService,
+        controller: SessionController,
         config: DiscoveryConfig,
         cancel_event: threading.Event,
         *,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        self.service = service
+        self.controller = controller
         self.config = config
         self.cancel_event = cancel_event
 
     def run(self) -> None:  # pragma: no cover - exercised via GUI/integration
         try:
-            result = self.service.discover(
+            result = self.controller.discover(
                 self.config,
                 cancel_event=self.cancel_event,
                 progress=self.progress.emit,
@@ -60,7 +60,7 @@ class GetWorker(QThread):
 
     def __init__(
         self,
-        service: GetService,
+        controller: SessionController,
         target_mac: str,
         config: GetConfig,
         cancel_event: threading.Event,
@@ -68,14 +68,14 @@ class GetWorker(QThread):
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        self.service = service
+        self.controller = controller
         self.target_mac = target_mac
         self.config = config
         self.cancel_event = cancel_event
 
     def run(self) -> None:  # pragma: no cover - exercised via GUI/integration
         try:
-            result = self.service.get(
+            result = self.controller.read_get(
                 self.target_mac,
                 self.config,
                 cancel_event=self.cancel_event,
@@ -95,7 +95,7 @@ class SignalWorker(QThread):
 
     def __init__(
         self,
-        service: SignalService,
+        controller: SessionController,
         target_mac: str,
         *,
         timeout_s: float,
@@ -104,7 +104,7 @@ class SignalWorker(QThread):
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        self.service = service
+        self.controller = controller
         self.target_mac = target_mac
         self.timeout_s = timeout_s
         self.vlan_id = vlan_id
@@ -112,7 +112,7 @@ class SignalWorker(QThread):
 
     def run(self) -> None:  # pragma: no cover - exercised via GUI/integration
         try:
-            result = self.service.signal(
+            result = self.controller.signal(
                 self.target_mac,
                 timeout_s=self.timeout_s,
                 vlan_id=self.vlan_id,
@@ -131,20 +131,20 @@ class WriteWorker(QThread):
 
     def __init__(
         self,
-        service: WriteService,
+        controller: SessionController,
         request: WriteRequest,
         cancel_event: threading.Event,
         *,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        self.service = service
+        self.controller = controller
         self.request = request
         self.cancel_event = cancel_event
 
     def run(self) -> None:  # pragma: no cover - exercised via GUI/integration
         try:
-            result = self.service.execute(
+            result = self.controller.execute_write(
                 self.request,
                 cancel_event=self.cancel_event,
                 progress=self.progress.emit,
@@ -161,7 +161,7 @@ class PostCheckWorker(QThread):
 
     def __init__(
         self,
-        service: WriteService,
+        controller: SessionController,
         result: WriteResult,
         timeout_s: float,
         cancel_event: threading.Event,
@@ -169,14 +169,14 @@ class PostCheckWorker(QThread):
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        self.service = service
+        self.controller = controller
         self.result = result
         self.timeout_s = timeout_s
         self.cancel_event = cancel_event
 
     def run(self) -> None:  # pragma: no cover - exercised via GUI/integration
         try:
-            result = self.service.post_check(
+            result = self.controller.post_check(
                 self.result,
                 timeout_s=self.timeout_s,
                 cancel_event=self.cancel_event,

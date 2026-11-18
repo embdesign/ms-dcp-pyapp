@@ -1,6 +1,8 @@
-"""Interfaces & Discovery tab construction."""
+"""Interfaces & Discovery tab construction and interface lifecycle."""
 
 from __future__ import annotations
+
+import threading
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -11,6 +13,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -19,7 +22,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...html_render import esc
+from ...interfaces import InterfaceInfo
+from ...model import DiscoveryResult
+from ...services.discovery import DiscoveryConfig
+from ...transport.interfaces import enumerate_interfaces
+from ...validation import validate_station_name
+from ..workers import DiscoveryWorker
 from .common import DEVICE_COLUMNS, banner
+from .common import table_item as _item
 
 
 class DiscoveryTabMixin:
@@ -176,3 +187,294 @@ class DiscoveryTabMixin:
         splitter.setSizes([430, 330])
         layout.addWidget(splitter, 1)
         return tab
+
+    # ------------------------------------------------------ interface lifecycle
+    def _refresh_interfaces(self) -> None:
+        if self.transport is not None and self.transport.is_capturing:
+            self._stop_capture(silent=True)
+        self._suppress_interface_signal = True
+        try:
+            self.interfaces = enumerate_interfaces(include_mock=True)
+            self.interface_table.setRowCount(0)
+            for iface in self.interfaces:
+                row = self.interface_table.rowCount()
+                self.interface_table.insertRow(row)
+                self.interface_table.setItem(
+                    row, 0, _item(iface.display_name, data=iface)
+                )
+                self.interface_table.setItem(row, 1, _item(iface.mac or "—", mono=True))
+                self.interface_table.setItem(row, 2, _item(iface.addresses_text, mono=True))
+                self.interface_table.setItem(row, 3, _item(iface.link_text))
+                self.interface_table.setItem(row, 4, _item(iface.kind))
+                self.interface_table.setItem(
+                    row, 5, _item("mock" if iface.kind == "mock" else "check on select")
+                )
+            target_id = self.current_interface.id if self.current_interface else None
+            target_row = -1
+            if target_id:
+                for row, iface in enumerate(self.interfaces):
+                    if iface.id == target_id:
+                        target_row = row
+                        break
+            if target_row >= 0:
+                self.interface_table.selectRow(target_row)
+            else:
+                self.interface_table.clearSelection()
+                self.interface_table.setCurrentCell(-1, -1)
+            if self.current_interface is not None and target_row < 0:
+                # The previously selected interface disappeared.
+                try:
+                    if self.transport is not None:
+                        self.transport.close()
+                except Exception:
+                    pass
+                self.transport = None
+                self.discovery_service = None
+                self.get_service = None
+                self.write_service = None
+                self.request_limiter = None
+                self.current_interface = None
+                self.last_readiness = None
+                self.safety_gate.disable_configuration_mode()
+        finally:
+            self._suppress_interface_signal = False
+        if self.current_interface is not None:
+            self._activate_interface(self.current_interface)
+        else:
+            self._update_capture_controls()
+            self.permission_label.setText(
+                "Select one interface explicitly. The Demo (mock) row works without "
+                "hardware or privileges; physical NICs should be on the PROFINET segment."
+            )
+            self.permission_label.setObjectName("bannerInfo")
+            self.permission_label.style().unpolish(self.permission_label)
+            self.permission_label.style().polish(self.permission_label)
+        self.event_log.info(
+            "interfaces.refreshed",
+            f"{len(self.interfaces)} interface(s) enumerated",
+            {"interfaces": [i.name for i in self.interfaces]},
+        )
+
+    def _on_interface_selected(self) -> None:
+        if self._suppress_interface_signal:
+            return
+        row = self.interface_table.currentRow()
+        if 0 <= row < len(self.interfaces):
+            self._activate_interface(self.interfaces[row])
+
+    def _activate_interface(self, iface: InterfaceInfo) -> None:
+        if (
+            self.current_interface is not None
+            and self.current_interface.id == iface.id
+            and self.transport is not None
+        ):
+            return
+        self.controller.reset_session()
+        self.capture.clear()
+        self.transaction_table.setRowCount(0)
+        self.device_table.setRowCount(0)
+        self.device_count_label.setText("0 device(s)")
+        self.test_results_table.setRowCount(0)
+        self.test_summary_label.setText("No tests run.")
+        self.packet_table.setRowCount(0)
+        self.packet_detail.clear()
+        self.packet_detail_label.setText("Select a frame to inspect it.")
+        self.config_result_label.setText(
+            "No configuration operation has been sent in this session."
+        )
+        self.reset_result_label.setText("No reset operation has been sent in this session.")
+        self.reset_post_check_label.setText("")
+        self.current_interface = iface
+        try:
+            self.controller.open_interface(
+                router=self.router,
+                min_interval_s=self.config.min_request_interval_s,
+                event_log=self._service_log,
+            )
+        except Exception as exc:
+            self.event_log.error("interface.activate", f"Could not activate interface: {exc}")
+            self.permission_label.setText(
+                f"<b>Cannot use this interface.</b><br>{esc(str(exc))}"
+            )
+            self.permission_label.setObjectName("bannerDanger")
+            self.permission_label.style().unpolish(self.permission_label)
+            self.permission_label.style().polish(self.permission_label)
+        self._update_permission_label()
+        self._update_capture_controls()
+        self._show_device(None)
+        self._update_report_preview()
+        self.event_log.info(
+            "interface.selected",
+            f"Selected {iface.name} ({iface.mac or 'no MAC'})",
+            {
+                "interface_id": iface.id,
+                "kind": iface.kind,
+                "mac": iface.mac,
+                "addresses": iface.addresses_text,
+                "link": iface.link_text,
+            },
+        )
+
+    def _update_permission_label(self) -> None:
+        if self.current_interface is None or self.transport is None:
+            self.permission_label.setText("Select an interface to evaluate capture readiness.")
+            self.permission_label.setObjectName("bannerInfo")
+        elif self.current_interface.kind == "mock":
+            self.permission_label.setText(
+                "<b>Demo (mock) interface.</b> No privileges, driver, or hardware required. "
+                "Three simulated devices respond to Identify. Set/Reset are simulated in "
+                "memory for guarded workflow testing; no hardware is affected."
+            )
+            self.permission_label.setObjectName("bannerOk")
+        elif self.last_readiness is not None:
+            readiness = self.last_readiness
+            hints = "".join(f"<br>• {esc(h)}" for h in readiness.hints)
+            if readiness.ready:
+                self.permission_label.setText(
+                    f"<b>Ready.</b> {esc(readiness.message)}"
+                )
+                self.permission_label.setObjectName("bannerOk")
+            else:
+                self.permission_label.setText(
+                    f"<b>Capture may fail.</b> {esc(readiness.message)}"
+                    f"<br><b>Remedies:</b>{hints}"
+                )
+                self.permission_label.setObjectName("bannerDanger")
+        self.permission_label.style().unpolish(self.permission_label)
+        self.permission_label.style().polish(self.permission_label)
+        self.status_privileges.setText(
+            f"Privileges: {'ready' if self.last_readiness and self.last_readiness.ready else 'check'}"
+        )
+
+    # -------------------------------------------------------------- discovery
+    def _start_discovery(
+        self, unicast_mac: str | None = None, *, apply_filter: bool = True
+    ) -> None:
+        if self._closing:
+            return
+        if self._discovery_running():
+            return
+        if self._tests_running() or self._get_running() or self._write_running() or self._post_check_running():
+            QMessageBox.information(
+                self,
+                "Another operation is running",
+                "Wait for the current Get, test, configuration, or reset operation to finish "
+                "(or cancel it) before starting discovery.",
+            )
+            return
+        if self.transport is None or self.discovery_service is None:
+            QMessageBox.warning(self, "No interface", "Select an interface first.")
+            return
+        filter_name: str | None = None
+        if unicast_mac is None and apply_filter:
+            candidate = self.filter_edit.text().strip()
+            if candidate:
+                report = validate_station_name(candidate)
+                if not report.ok:
+                    QMessageBox.warning(
+                        self, "Invalid NameOfStation filter", report.summary()
+                    )
+                    return
+                filter_name = candidate
+        if not self.transport.is_capturing and not self._start_capture():
+            return
+        cfg = DiscoveryConfig(
+            timeout_s=self.timeout_spin.value(),
+            response_delay_factor=self.delay_spin.value(),
+            vlan_id=self.vlan_spin.value() or None,
+            unicast_mac=unicast_mac,
+            min_request_interval_s=self.config.min_request_interval_s,
+            identify_filter_name=filter_name,
+        )
+        self.discovery_cancel = threading.Event()
+        worker = DiscoveryWorker(self.controller, cfg, self.discovery_cancel, parent=self)
+        worker.finished_ok.connect(self._on_discovery_finished)
+        worker.failed.connect(self._on_discovery_failed)
+        worker.progress.connect(self._on_discovery_progress)
+        worker.finished.connect(self._on_discovery_thread_finished)
+        self.discovery_worker = worker
+        if unicast_mac:
+            self.discovery_summary_label.setText(f"Unicast Identify to {unicast_mac}…")
+        elif filter_name:
+            self.discovery_summary_label.setText(
+                f"Discovering NameOfStation {filter_name!r}…"
+            )
+        else:
+            self.discovery_summary_label.setText("Discovering…")
+        self.discovery_warning_label.setVisible(False)
+        mode = (
+            f"unicast {unicast_mac}"
+            if unicast_mac
+            else (
+                f"NameOfStation filter {filter_name!r}"
+                if filter_name
+                else "multicast"
+            )
+        )
+        self.event_log.info(
+            "discovery.start",
+            f"Identify request ({mode})",
+            {
+                "interface": self.current_interface.id if self.current_interface else None,
+                "timeout_s": cfg.timeout_s,
+                "response_delay_factor": cfg.response_delay_factor,
+                "vlan_id": cfg.vlan_id,
+                "unicast_mac": unicast_mac,
+                "identify_filter_name": filter_name,
+            },
+        )
+        self._update_capture_controls()
+        self.discover_button.setEnabled(False)
+        self.cancel_discovery_button.setEnabled(True)
+        worker.start()
+
+    def _cancel_discovery(self) -> None:
+        self.discovery_cancel.set()
+        self.discovery_summary_label.setText("Cancelling discovery…")
+        self.event_log.warning("discovery.cancel", "Cancellation requested by user")
+
+    def _on_discovery_progress(self, message: str) -> None:
+        self.discovery_summary_label.setText(message)
+
+    def _on_discovery_finished(self, result: DiscoveryResult) -> None:
+        self.latest_discovery = result
+        self.discovery_runs.append(result)
+        if len(self.discovery_runs) > 50:
+            self.discovery_runs = self.discovery_runs[-50:]
+        self._ingest_result(result)
+        self._populate_device_table()
+        self._append_transaction_rows(result.transactions)
+        self.discovery_summary_label.setText(
+            f"{result.outcome_text} · {len(result.devices)} device(s) · "
+            f"{result.duration_ms:.0f} ms · Xid 0x{result.xid:08x} · "
+            f"duplicates {result.duplicate_responses} · late {result.late_responses} · "
+            f"unmatched {result.unmatched_responses}"
+        )
+        warnings = list(result.warnings)
+        if warnings:
+            self.discovery_warning_label.setText(
+                "<b>Discovery notes</b><br>"
+                + "<br>".join(f"• {esc(w)}" for w in warnings)
+            )
+            self.discovery_warning_label.setVisible(True)
+            for warning in warnings:
+                self.event_log.warning("discovery.warning", warning, {"xid": result.xid})
+        else:
+            self.discovery_warning_label.setVisible(False)
+        self._update_report_preview()
+        self._update_capture_stats()
+        self._update_capture_controls()
+        # The Test Runner offers the discovered devices as devices under test.
+        self._refresh_dut_combo()
+
+    def _on_discovery_failed(self, message: str) -> None:
+        self.discovery_summary_label.setText("Discovery failed.")
+        self.event_log.error("discovery.failed", message)
+        QMessageBox.critical(self, "Discovery failed", message)
+        self._update_capture_controls()
+
+    def _on_discovery_thread_finished(self) -> None:
+        if self.discovery_worker is not None:
+            self.discovery_worker.deleteLater()
+        self.discovery_worker = None
+        self._update_capture_controls()

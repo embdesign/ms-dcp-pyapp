@@ -50,7 +50,6 @@ from .reporting import ReportContext, summarize_statuses, write_html_report, wri
 from .services.capture import FrameRouter
 from .services.discovery import DiscoveryConfig, DiscoveryService
 from .services.get import GET_PRESETS, GetConfig, GetService
-from .services.rate_limit import RequestRateLimiter
 from .services.signal import SignalService
 from .services.write import (
     WriteAuthorization,
@@ -59,10 +58,10 @@ from .services.write import (
     WriteService,
     identity_text,
 )
+from .session import build_services, probe_readiness
 from .testrunner.cases import TEST_CASES
 from .testrunner.runner import TestRunner
-from .transport.base import TransportError
-from .transport.factory import create_transport
+from .transport.base import DcpTransport, TransportError
 from .transport.interfaces import (
     MOCK_INTERFACE_ID,
     InterfaceInfo,
@@ -214,50 +213,52 @@ def _maybe_write_report(
 
 # ------------------------------------------------------------------- session
 class _Session:
-    """Transport + services wired exactly like the GUI's capture path."""
+    """Thin adapter over :func:`dcpstudio.session.build_services`.
+
+    Keeps the attribute names the command handlers already use, so the CLI and
+    the GUI are wired by the same code.
+    """
 
     def __init__(self, interface: InterfaceInfo, *, min_interval_s: float) -> None:
         self.interface = interface
-        self.transport = create_transport(interface)
         self.logger = EventLogger()
-        self.router = FrameRouter()
-        self.discovery = DiscoveryService(
-            self.transport,
-            limiter=RequestRateLimiter(min_interval_s),
+        self._services = build_services(
+            interface,
+            min_interval_s=min_interval_s,
             event_log=self.logger.info,
         )
-        self.getter = GetService(
-            self.transport,
-            limiter=self.discovery.limiter,
-            event_log=self.logger.info,
-        )
-        self.writer = WriteService(
-            self.transport,
-            discovery_service=self.discovery,
-            get_service=self.getter,
-            limiter=self.discovery.limiter,
-            event_log=self.logger.info,
-        )
-        self.signal = SignalService(
-            self.transport,
-            limiter=self.discovery.limiter,
-            event_log=self.logger.info,
-        )
-        for listener in (
-            self.discovery.process_frame,
-            self.getter.process_frame,
-            self.writer.process_frame,
-            self.signal.process_frame,
-        ):
-            self.router.add_listener(listener)
-        self.transport.set_frame_callback(self.router)
+
+    @property
+    def transport(self) -> DcpTransport:
+        return self._services.transport
+
+    @property
+    def router(self) -> FrameRouter:
+        return self._services.router
+
+    @property
+    def discovery(self) -> DiscoveryService:
+        return self._services.discovery
+
+    @property
+    def getter(self) -> GetService:
+        return self._services.getter
+
+    @property
+    def writer(self) -> WriteService:
+        return self._services.writer
+
+    @property
+    def signal(self) -> SignalService:
+        assert self._services.signal is not None
+        return self._services.signal
 
     def __enter__(self) -> _Session:
         self.transport.start_capture()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
-        self.transport.close()
+        self._services.close()
         return False
 
 
@@ -398,11 +399,7 @@ def _write_exit_code(result: WriteResult) -> int:
 
 # ------------------------------------------------------------------ commands
 def _interface_readiness(item: InterfaceInfo) -> dict[str, Any]:
-    transport = create_transport(item)
-    try:
-        return transport.readiness().to_dict()
-    finally:
-        transport.close()
+    return probe_readiness(item).to_dict()
 
 
 def _cmd_interfaces(args: argparse.Namespace) -> int:

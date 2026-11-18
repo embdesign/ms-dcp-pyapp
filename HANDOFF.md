@@ -1,7 +1,7 @@
 # Task Handoff
 
-Project: `dcp-studio` 0.1.0 (package `dcpstudio`, folder `ms-dcp-pyapp`).
-Last updated: 2026-11-14.
+Project: `dcp-studio` 0.1.1 (package `dcpstudio`, folder `ms-dcp-pyapp`).
+Last updated: 2026-11-19.
 
 > All statements below are based on direct inspection of the files as they
 > exist on disk. Take a backup archive before bulk edits and do not commit

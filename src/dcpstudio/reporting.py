@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -10,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
+from .html_render import cell, empty_row, esc, li_items, row
+from .interfaces import InterfaceInfo, Readiness
 from .model import (
     DiscoveryResult,
     GetResult,
@@ -20,7 +21,6 @@ from .model import (
     report_metadata,
     utc_now,
 )
-from .transport.base import InterfaceInfo, Readiness
 
 REPORT_SCHEMA_VERSION = 2
 
@@ -190,7 +190,7 @@ def report_filename(prefix: str = "dcp-report", *, extension: str = "json") -> s
 
 def render_html_report(context: ReportContext) -> str:
     report = build_report(context)
-    e = html.escape
+    e = esc
     interface = report["test_configuration"]["interface"] or {}
     readiness = report["readiness"] or {}
     latest = report["latest_discovery"] or {}
@@ -201,66 +201,76 @@ def render_html_report(context: ReportContext) -> str:
 
     def device_rows() -> str:
         if not devices:
-            return '<tr><td colspan="9" class="empty">No devices discovered.</td></tr>'
+            return empty_row(9, "No devices discovered.")
         rows = []
         for d in devices:
             ip_value = d.get("ip_address")
             ip_display = "<not set>" if not ip_value or ip_value == "0.0.0.0" else str(ip_value)
             rows.append(
-                "<tr>"
-                f"<td class='mono'>{e(str(d.get('mac', '')))}</td>"
-                f"<td>{e(str(d.get('name_of_station') or '<not set>'))}</td>"
-                f"<td class='mono'>{e(ip_display)}</td>"
-                f"<td class='mono'>{e(str(d.get('subnet_mask') or '—'))}</td>"
-                f"<td class='mono'>{e(str(d.get('gateway') or '—'))}</td>"
-                f"<td class='mono'>{e(str(d.get('vendor_id_hex') or '—'))}</td>"
-                f"<td class='mono'>{e(str(d.get('device_id_hex') or '—'))}</td>"
-                f"<td>{e(', '.join(d.get('device_role_names') or []) or 'not advertised')}</td>"
-                f"<td class='mono'>{e(str(d.get('response_time_ms') if d.get('response_time_ms') is not None else '—'))}</td>"
-                "</tr>"
+                row(
+                    cell(d.get("mac", ""), mono=True),
+                    cell(d.get("name_of_station") or "<not set>"),
+                    cell(ip_display, mono=True),
+                    cell(d.get("subnet_mask") or "—", mono=True),
+                    cell(d.get("gateway") or "—", mono=True),
+                    cell(d.get("vendor_id_hex") or "—", mono=True),
+                    cell(d.get("device_id_hex") or "—", mono=True),
+                    cell(", ".join(d.get("device_role_names") or []) or "not advertised"),
+                    cell(
+                        d.get("response_time_ms")
+                        if d.get("response_time_ms") is not None
+                        else "—",
+                        mono=True,
+                    ),
+                )
             )
         return "\n".join(rows)
 
     def transaction_rows() -> str:
         if not transactions:
-            return '<tr><td colspan="6" class="empty">No transactions recorded.</td></tr>'
+            return empty_row(6, "No transactions recorded.")
         rows = []
         for t in transactions:
             rows.append(
-                "<tr>"
-                f"<td class='mono'>{e(str(t.get('timestamp', '')))}</td>"
-                f"<td>{e(str(t.get('event', '')))}</td>"
-                f"<td>{e(str(t.get('outcome', '')))}</td>"
-                f"<td class='mono'>{e(_xid_text(t.get('xid')))}</td>"
-                f"<td class='mono'>{e(str(t.get('peer_mac') or '—'))}</td>"
-                f"<td>{e(str(t.get('detail') or ''))}</td>"
-                "</tr>"
+                row(
+                    cell(t.get("timestamp", ""), mono=True),
+                    cell(t.get("event", "")),
+                    cell(t.get("outcome", "")),
+                    cell(_xid_text(t.get("xid")), mono=True),
+                    cell(t.get("peer_mac") or "—", mono=True),
+                    cell(t.get("detail") or ""),
+                )
             )
         return "\n".join(rows)
 
     def get_rows() -> str:
         operations = report.get("get_operations", [])
         if not operations:
-            return '<tr><td colspan="7" class="empty">No read-only Get operations.</td></tr>'
+            return empty_row(7, "No read-only Get operations.")
         rows = []
         for operation in operations:
             rows.append(
-                "<tr>"
-                f"<td class='mono'>{e(str(operation.get('finished_at', '')))}</td>"
-                f"<td class='mono'>{e(str(operation.get('target_mac', '')))}</td>"
-                f"<td>{e(str(operation.get('outcome_text', operation.get('outcome', ''))))}</td>"
-                f"<td class='mono'>{e(_xid_text(operation.get('xid')))}</td>"
-                f"<td>{e(str(len(operation.get('blocks', []))))}</td>"
-                f"<td>{e(str(len(operation.get('block_errors', []))))}</td>"
-                f"<td class='mono'>{e(str(operation.get('rtt_ms') if operation.get('rtt_ms') is not None else '—'))}</td>"
-                "</tr>"
+                row(
+                    cell(operation.get("finished_at", ""), mono=True),
+                    cell(operation.get("target_mac", ""), mono=True),
+                    cell(operation.get("outcome_text", operation.get("outcome", ""))),
+                    cell(_xid_text(operation.get("xid")), mono=True),
+                    cell(len(operation.get("blocks", []))),
+                    cell(len(operation.get("block_errors", []))),
+                    cell(
+                        operation.get("rtt_ms")
+                        if operation.get("rtt_ms") is not None
+                        else "—",
+                        mono=True,
+                    ),
+                )
             )
         return "\n".join(rows)
 
     def write_rows() -> str:
         operations = report.get("write_operations", [])
         if not operations:
-            return '<tr><td colspan="8" class="empty">No state-changing operations.</td></tr>'
+            return empty_row(8, "No state-changing operations.")
         rows = []
         for operation in operations:
             before = operation.get("before_identity") or {}
@@ -268,45 +278,46 @@ def render_html_report(context: ReportContext) -> str:
             before_name = before.get("name_of_station") or "<not set>"
             after_name = after.get("name_of_station") or "<not set>"
             rows.append(
-                "<tr>"
-                f"<td class='mono'>{e(str(operation.get('finished_at', '')))}</td>"
-                f"<td class='mono'>{e(str(operation.get('target_mac', '')))}</td>"
-                f"<td>{e(str(operation.get('operation_text', '')))}</td>"
-                f"<td class='mono'>{e(str(operation.get('block_qualifier_hex') or '—'))}</td>"
-                f"<td>{e(str(operation.get('outcome_text', '')))}</td>"
-                f"<td>{e(str(operation.get('verification', '')))}</td>"
-                f"<td>{e(str(operation.get('post_check_state', 'not_attempted')))}</td>"
-                f"<td>{e(f'{before_name} → {after_name}')}</td>"
-                "</tr>"
+                row(
+                    cell(operation.get("finished_at", ""), mono=True),
+                    cell(operation.get("target_mac", ""), mono=True),
+                    cell(operation.get("operation_text", "")),
+                    cell(operation.get("block_qualifier_hex") or "—", mono=True),
+                    cell(operation.get("outcome_text", "")),
+                    cell(operation.get("verification", "")),
+                    cell(operation.get("post_check_state", "not_attempted")),
+                    cell(f"{before_name} → {after_name}"),
+                )
             )
         return "\n".join(rows)
 
     def test_rows() -> str:
         if not tests:
-            return '<tr><td colspan="6" class="empty">No tests were run.</td></tr>'
+            return empty_row(6, "No tests were run.")
         rows = []
         for t in tests:
             status = str(t.get("status", ""))
             rows.append(
-                f"<tr class='status-{e(status)}'>"
-                f"<td class='mono'>{e(str(t.get('test_id', '')))}</td>"
-                f"<td>{e(str(t.get('name', '')))}</td>"
-                f"<td>{e(str(t.get('category', '')))}</td>"
-                f"<td class='status'>{e(status.upper())}</td>"
-                f"<td class='mono'>{e(str(t.get('duration_ms', '')))}</td>"
-                f"<td>{e(str(t.get('detail', '')))}</td>"
-                "</tr>"
+                row(
+                    cell(t.get("test_id", ""), mono=True),
+                    cell(t.get("name", "")),
+                    cell(t.get("category", "")),
+                    f"<td class='status'>{esc(status.upper())}</td>",
+                    cell(t.get("duration_ms", ""), mono=True),
+                    cell(t.get("detail", "")),
+                    class_name=f"status-{status}",
+                )
             )
         return "\n".join(rows)
 
     def limitations_html() -> str:
-        return "".join(f"<li>{e(item)}</li>" for item in report["known_limitations"])
+        return li_items(report["known_limitations"])
 
     def notes_html() -> str:
         notes = latest.get("warnings", []) if latest else []
         if not notes:
             return '<p class="muted">No discovery warnings.</p>'
-        return "".join(f"<li>{e(str(item))}</li>" for item in notes)
+        return li_items(notes)
 
     def before_after_html() -> str:
         if not context.before_after and not report.get("before_after_observations"):
@@ -322,12 +333,12 @@ def render_html_report(context: ReportContext) -> str:
         rows = []
         for record in context.logs[-500:]:
             rows.append(
-                "<tr>"
-                f"<td class='mono'>{e(iso_utc(record.timestamp) or '')}</td>"
-                f"<td>{e(record.level)}</td>"
-                f"<td class='mono'>{e(record.event)}</td>"
-                f"<td>{e(record.message)}</td>"
-                "</tr>"
+                row(
+                    cell(iso_utc(record.timestamp) or "", mono=True),
+                    cell(record.level),
+                    cell(record.event, mono=True),
+                    cell(record.message),
+                )
             )
         return "\n".join(rows)
 

@@ -1,7 +1,7 @@
 # DCP Studio — Architecture and Implementation Record
 
 Status: **Phases 1–4 implemented, tested and consolidated** (2026-11-14)
-Application: `dcpstudio` 0.1.0
+Application: `dcpstudio` 0.1.1
 Scope of this build: **PROFINET DCP discovery, passive decoding, read-only Get,
 unguarded LED Signal, per-operation-confirmed NameOfStation/IP Set, verified
 reset variants (RTFS 1/2/4/8 and legacy `05/05`), post-checks, the functional
@@ -138,21 +138,27 @@ flowchart TB
 | Module | Responsibility |
 |---|---|
 | `constants.py` | Verified protocol constants and names; no guessed values |
+| `outcomes.py` | Typed outcome vocabulary (`RequestState`, `DiscoveryOutcome`, `Verification`, `PostCheckState`, `TransactionOutcome`, `ResponseVerdict`) and the single display-text table; serializes as the same strings as before |
+| `html_render.py` | One Qt-free escaping and table-markup path (`esc`, `cell`, `row`, `empty_row`, `li_items`, `joined`) shared by the report and every GUI summary |
 | `model.py` | `DcpFrame`, `DcpBlock`, `DeviceIdentity`, `TransactionRecord`, `DiscoveryResult`, `GetResult`, `WriteResult`, `TestResult`, UTC helpers |
 | `codec.py` | Pure builders (Identify, Get, Set Name/IP, Signal, RTFS and legacy reset) and defensive parser |
 | `validation.py` | PROFINET name and IPv4 suite validation |
-| `transport/base.py` | Transport protocol, interface/readiness models, callback contract |
+| `interfaces.py` | Domain descriptions of a network interface and capture readiness (`InterfaceInfo`, `Readiness`), plus the mock interface. No I/O, no Qt, no Scapy |
+| `transport/base.py` | Transport protocol and callback contract; re-exports the domain interface/readiness models |
 | `transport/interfaces.py` | Scapy interface enumeration, link state, CAP_NET_RAW/Npcap checks |
 | `transport/scapy_transport.py` | Sniffer-before-send, BPF fallback, raw send, clean shutdown |
 | `transport/factory.py` | Choose Scapy or mock transport |
 | `mock.py` | Offline mock devices and transport; simulates Set/Reset in memory only |
 | `services/rate_limit.py` | Minimum request interval, cancellation-aware |
 | `services/capture.py` | Bounded passive capture buffer and frame fan-out |
+| `services/correlation.py` | Shared one-request correlation: `PendingRequest`, the common destination/Xid/source/duplicate decision, and the bounded wait/collect loops used by Discovery, Get, Write and Signal |
+| `session.py` | Single composition root: builds the transport, router, shared rate limiter and discovery/Get/Write/Signal services for one interface. Used by the GUI, the CLI and the test runner |
 | `services/discovery.py` | One-request Identify, Xid/service/target matching, dedupe, late/unrelated handling |
 | `services/get.py` | One-request read-only Get, block presets, Xid/target matching, block-error reporting |
 | `services/write.py` | Guarded Set/Reset, confirmation, fresh target revalidation, one-shot send, read-back, reset post-check |
 | `services/signal.py` | Unguarded DCP Signal (`05/03`): one unicast frame, rate-limited, never retried; result `acknowledged` with `verification="not_attempted"`. Never routed through `WriteService` |
-| `testrunner/runner.py` | Read-only functional tests plus optional guarded state-changing tests; re-exports the catalogue from `cases.py` |
+| `testrunner/runner.py` | Run orchestration, service wiring, result helpers and the ID→handler dispatch; the handlers themselves live in `testrunner/handlers/` |
+| `testrunner/handlers/` | One mixin per ID namespace (`env`, `parser`, `protocol`, `validation`, `write`); `TestRunner` inherits them, so `getattr(self, f"_test_{id}")` still resolves the handler |
 | `testrunner/cases.py` | `TestCase` and the 20-entry `TEST_CASES` catalogue (functional ID namespace: `env.*`, `parser.*`, `protocol.*`, `validation.*`, `write.*`) |
 | `pcap_io.py` | Timestamp-preserving classic PCAP write/read |
 | `reporting.py` | JSON and escaped HTML reports with limitations/warnings |
@@ -164,13 +170,20 @@ flowchart TB
 | `utils.py` | Hex dump, JSON default conversion and pretty-printing helpers (no Qt, no I/O) |
 | `cli.py` | Headless adapter over the same services: interface listing, Identify, Get, Signal, guarded Set/Reset, read-only functional tests, offline PCAP, JSON output and reports. Guarded commands require `--enable-configuration`, `--confirm` and `--safe-maintenance`; no new wire behaviour |
 | `gui/app.py` | Application bootstrap and the close/`deleteLater`/`processEvents` shutdown sequence |
-| `gui/workers.py` | `QThread` workers: discovery, Get, Signal, guarded write, reset post-check, test run and PCAP load |
+| `gui/workers.py` | `QThread` workers: discovery, Get, Signal, guarded write, reset post-check, test run and PCAP load. The service workers are thin adapters over `SessionController` |
 | `gui/confirmation.py` | Per-operation confirmation dialog |
 | `gui/presentation.py` | Qt-free rendering helpers (device summary, Get/Write results, report preview) |
-| `gui/main_window.py` | Shared controller: transport/service lifecycle, discovery, guarded writes, post-checks, configuration persistence and shutdown |
-| `gui/tabs/` | One construction/handler mixin per tab (discovery, device, configuration, reset, test runner, capture, logs) |
+| `gui/controller.py` | `SessionController`: session state (interface, transport, services, safety gate, device cache, result histories) and the operations `discover` / `read_get` / `signal` / `execute_write` / `post_check`. Usable without a window |
+| `gui/main_window.py` | Window shell: widgets, menu, status bar, tab wiring, session-state properties, configuration persistence and shutdown. It delegates to `SessionController` and to the tab mixins; it holds no tab-specific handler |
+| `gui/tabs/` | One construction/**handler** mixin per tab (discovery incl. interface lifecycle, device, configuration, reset, test runner, capture incl. capture lifecycle, logs) plus `write_flow.py` for the guarded Set/Reset flow and the read-only post-check |
 
 ### 2.2 Threading and lifecycle
+
+GUI, CLI and test runner obtain their service set from the same composition
+root, `session.build_services()`. The GUI supplies its long-lived router and
+keeps its own frame fan-out; the CLI and the runner let the root register the
+services on a new router. This replaced three copies of the same wiring (see
+[`docs/architecture.md`](docs/architecture.md) §5.3).
 
 - GUI thread never performs blocking I/O.
 - `DiscoveryWorker(QThread)` runs `DiscoveryService.discover`; cancellation is a
@@ -266,7 +279,9 @@ Post-phase consolidation (also complete):
 - Ruff lint gate with explicit rule selection; `uv run ruff check src tests tools` clean.
 - `gui/main_window.py` split into a ~1 400-line controller plus `gui/tabs/`
   mixins; `WriteService.execute` split into named phases; guarded-operation
-  text centralised in `operations.py`.
+  text centralised in `operations.py`. A later pass reduced the window shell
+  itself to ~380 lines by moving the discovery/capture lifecycles and the
+  guarded write flow into the tab mixins (`gui/tabs/write_flow.py`).
 - Live validation on an isolated lab segment: read-only paths plus guarded
   Set Name/IP, RTFS modes 2/8 and legacy `05/05`.
 

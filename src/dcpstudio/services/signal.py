@@ -26,12 +26,14 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..codec import build_signal_request, classify_set_response, new_xid, parse_frame
-from ..model import DcpFrame, TransactionRecord, WriteResult, utc_now
+from ..constants import ServiceId
+from ..model import TransactionRecord, WriteResult, utc_now
+from ..outcomes import RequestState, ResponseVerdict, TransactionOutcome
 from ..transport.base import DcpTransport, TransportError
+from .correlation import PendingRequest, wait_for_response
 from .rate_limit import RequestRateLimiter
 
 EventLog = Callable[[str, str, dict], None]
@@ -41,20 +43,6 @@ OPERATION_TEXT = "Signal device (flash LED)"
 # A response that arrives this long after the deadline is still matched (and
 # reported as late) instead of being silently dropped.
 _LATE_RESPONSE_GRACE_S = 0.15
-
-
-@dataclass(slots=True)
-class _PendingSignal:
-    xid: int
-    target_mac: str
-    deadline_monotonic: float
-    request_monotonic: float
-    request_tx_utc: datetime
-    response: DcpFrame | None = None
-    response_timestamp: datetime | None = None
-    rtt_ms: float | None = None
-    transactions: list[TransactionRecord] = field(default_factory=list)
-    response_event: threading.Event = field(default_factory=threading.Event)
 
 
 class SignalService:
@@ -71,7 +59,7 @@ class SignalService:
         self.limiter = limiter or RequestRateLimiter()
         self.event_log = event_log
         self._lock = threading.Lock()
-        self._pending: _PendingSignal | None = None
+        self._pending: PendingRequest | None = None
 
     # ---------------------------------------------------------------- frames
     def process_frame(self, raw: bytes, timestamp: datetime, direction: str) -> None:
@@ -89,19 +77,16 @@ class SignalService:
             return
         with self._lock:
             pending = self._pending
-        if pending is None or frame.xid != pending.xid:
-            return
-        if (frame.src_mac or "").lower() != pending.target_mac.lower():
-            return
-        if frame.service_id != 0x04:  # ServiceID Set
-            return
-        if pending.response is not None:
-            return  # first matching response wins; duplicates are ignored
-        now = time.monotonic()
-        pending.response = frame
-        pending.response_timestamp = timestamp
-        pending.rtt_ms = max(0.0, (now - pending.request_monotonic) * 1000.0)
-        pending.response_event.set()
+            if pending is None or frame.xid != pending.xid:
+                return
+            if (frame.src_mac or "").lower() != (pending.target_mac or "").lower():
+                return
+            if frame.service_id != int(ServiceId.SET):
+                return
+            if pending.response is not None:
+                return  # first matching response wins; duplicates are ignored
+            pending.mark_response(frame, timestamp)
+            pending.notify_response()
 
     # ----------------------------------------------------------------- action
     def signal(
@@ -143,7 +128,7 @@ class SignalService:
                 src_mac, target_mac, xid, vlan_id=vlan_id
             )
         except Exception as exc:
-            result.state = "blocked"
+            result.state = RequestState.BLOCKED
             result.error = f"Could not encode the request: {exc}"
             result.finished_at = utc_now()
             result.warnings.append("No frame was transmitted.")
@@ -151,13 +136,13 @@ class SignalService:
         result.request_frame_hex = raw_request.hex()
 
         if not self.transport.is_capturing:
-            result.state = "blocked"
+            result.state = RequestState.BLOCKED
             result.error = "Passive capture is not running"
             result.finished_at = utc_now()
             result.warnings.append("No frame was transmitted.")
             return result
         if not src_mac:
-            result.state = "blocked"
+            result.state = RequestState.BLOCKED
             result.error = "Selected interface has no MAC address"
             result.finished_at = utc_now()
             result.warnings.append("No frame was transmitted.")
@@ -166,13 +151,13 @@ class SignalService:
         if progress:
             progress(f"Waiting for request pacing ({self.limiter.remaining_s():.1f} s)…")
         if not self.limiter.wait(cancel_event):
-            result.state = "cancelled"
+            result.state = RequestState.CANCELLED
             result.cancelled = True
             result.finished_at = utc_now()
             result.warnings.append("Cancelled before the Signal frame was transmitted.")
             return result
 
-        pending = _PendingSignal(
+        pending = PendingRequest(
             xid=xid,
             target_mac=target_mac,
             deadline_monotonic=time.monotonic() + float(timeout_s),
@@ -181,7 +166,7 @@ class SignalService:
         )
         with self._lock:
             if self._pending is not None:
-                result.state = "error"
+                result.state = RequestState.ERROR
                 result.error = "Another Signal request is already pending"
                 result.finished_at = utc_now()
                 return result
@@ -192,7 +177,7 @@ class SignalService:
         except Exception as exc:
             with self._lock:
                 self._pending = None
-            result.state = "error"
+            result.state = RequestState.ERROR
             result.error = (
                 str(exc) if isinstance(exc, TransportError) else f"Transmission failed: {exc}"
             )
@@ -207,7 +192,7 @@ class SignalService:
                 timestamp=pending.request_tx_utc,
                 event="signal_request",
                 interface_id=self.transport.interface.id,
-                outcome="transmitted",
+                outcome=TransactionOutcome.TRANSMITTED,
                 detail=f"{OPERATION_TEXT}; SignalValue 0x0100; no retry",
                 xid=xid,
                 service="Set",
@@ -223,16 +208,7 @@ class SignalService:
                 {"xid": xid, "target": target_mac, "request_hex": raw_request.hex()},
             )
 
-        while True:
-            remaining = pending.deadline_monotonic - time.monotonic()
-            if cancel_event.is_set():
-                break
-            if remaining <= -_LATE_RESPONSE_GRACE_S:
-                break
-            if pending.response_event.wait(
-                min(0.05, max(0.0, remaining) if remaining > 0 else 0.02)
-            ):
-                break
+        wait_for_response(pending, cancel_event, grace_s=_LATE_RESPONSE_GRACE_S)
 
         with self._lock:
             self._pending = None
@@ -244,17 +220,17 @@ class SignalService:
 
         if response is None:
             if cancel_event.is_set():
-                result.state = "cancelled"
+                result.state = RequestState.CANCELLED
                 result.cancelled = True
                 result.warnings.append(
                     "Cancelled while waiting. The Signal frame had already been transmitted; "
                     "cancellation does not undo it, and the outcome is unknown."
                 )
-                outcome = "outcome_unknown"
+                outcome = TransactionOutcome.OUTCOME_UNKNOWN
                 event = "signal_cancelled"
             else:
-                result.state = "no_response"
-                outcome = "outcome_unknown"
+                result.state = RequestState.NO_RESPONSE
+                outcome = TransactionOutcome.OUTCOME_UNKNOWN
                 event = "signal_timeout"
                 result.warnings.append(
                     "No matching Set response was observed. This is outcome unknown, not "
@@ -281,14 +257,14 @@ class SignalService:
         verdict, error, text = classify_set_response(response)
         result.response_verdict = verdict
         result.block_error = error
-        if verdict == "acknowledged":
-            result.state = "acknowledged"
-        elif verdict == "rejected":
-            result.state = "rejected"
-        elif verdict == "service_not_supported":
-            result.state = "service_not_supported"
+        if verdict == ResponseVerdict.ACKNOWLEDGED:
+            result.state = RequestState.ACKNOWLEDGED
+        elif verdict == ResponseVerdict.REJECTED:
+            result.state = RequestState.REJECTED
+        elif verdict == ResponseVerdict.SERVICE_NOT_SUPPORTED:
+            result.state = RequestState.SERVICE_NOT_SUPPORTED
         else:
-            result.state = "error"
+            result.state = RequestState.ERROR
             result.error = text
         result.transactions.append(
             TransactionRecord(

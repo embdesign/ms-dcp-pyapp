@@ -6,12 +6,15 @@ passive decoding, guarded configuration, reset testing, and functional testing.
 Built with **Python 3.11+**, **PySide6**, **Scapy 2.8.0**, **uv**, and
 `pyproject.toml`. Runs natively on Linux and Windows; no Docker required.
 
-> **Phases 1–4 are implemented.** The build enumerates interfaces, passively
-> decodes DCP, performs multicast/unicast **Identify** and read-only **Get**,
-> and provides explicitly enabled, per-operation-confirmed **Set NameOfStation**,
-> **Set IP parameters**, and **ResetToFactorySettings** variants. State-changing
-> operations require configuration mode, per-operation confirmation, fresh target
-> revalidation, and never retry automatically. No batch or broadcast path exists.
+> **The delivered build implements the full documented capability set.** It
+> enumerates interfaces, passively decodes DCP, performs multicast/unicast
+> **Identify** and read-only **Get**, and provides explicitly enabled
+> **Set NameOfStation**, **Set IP parameters**, and
+> **ResetToFactorySettings** variants. State-changing operations require
+> configuration mode, an explicit confirmation (per operation in the
+> Configuration/Reset tabs and the CLI; once per run for the declared device
+> under test in the Test Runner), fresh target revalidation, and never retry
+> automatically. No batch or broadcast path exists.
 
 ![DCP Studio main window: Interfaces & Discovery tab with interface list,
 Identify discovery controls and the discovered-device
@@ -40,7 +43,7 @@ table](docs/pics/dcp_studio.png)
   temporary/permanent BlockQualifier selection and a read-back Get.
 - Performs guarded **ResetToFactorySettings** modes 1, 2, 4 and 8, and the older
   **legacy FactoryReset** (`05/05`, no mode field, full reset); every reset
-  requires configuration mode and a per-operation confirmation. Modes 3 and 9
+  requires configuration mode and an explicit confirmation. Modes 3 and 9
   remain disabled because their semantics were not verified.
 - **Signals one selected device** (Control/Signal `05/03`, SignalValue `0x0100`)
   so its identification LED flashes. Signal stores nothing and interrupts
@@ -202,7 +205,7 @@ or refusal, and `2` inconclusive/outcome unknown (no matching response).
 | **Device Details** | Identity summary, per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets, and **Signal device (flash LED)** — one unguarded `05/03` frame |
 | **Configuration** | Guarded NameOfStation and IPv4 Set operations with temporary/permanent qualifier, validation, per-operation confirmation, fresh target revalidation, and read-back verification |
 | **Reset** | Guarded ResetToFactorySettings modes 1, 2, 4 and 8 with the documented wire qualifier, plus the legacy FactoryReset (`05/05`, full reset, no mode field); per-operation confirmation and an optional read-only post-check |
-| **Test Runner** | Safe tests plus optional guarded state-changing tests that require configuration mode, a selected target, and separate confirmation. Run at most one state-changing test per test run |
+| **Test Runner** | Tests grouped by category (environment, offline parser/transactions/validation, live DCP, state-changing). Pick the device under test, then run the **device validation suite** (read-only checks plus one Set Name, one Set IP and one Reset) or the **full validation suite**; read-only presets and per-test selection are available too. The DUT selection plus the run button is the single authorization for the suite; configuration mode is still required and every frame is sent once, revalidated and read back |
 | **Packet Capture** | Live/offline frame list, DCP filter, hex detail, PCAP export/import |
 | **Logs & Reports** | Structured event log, transaction log, session summary, JSON/HTML export |
 
@@ -271,14 +274,19 @@ Offline tests never send frames to live equipment.
 
 ```
 src/dcpstudio/
+  __init__.py           application name, phase and installed version
   constants.py          verified DCP values (no guesses)
   codec.py              pure encode/decode including Set, Signal and reset builders
   model.py              frames, blocks, devices, results, UTC helpers
+  outcomes.py           typed outcome vocabulary and display texts
+  html_render.py        one escaping/table-markup path for reports and GUI summaries
   operations.py         guarded-operation catalogue (confirmation text + qualifier)
   validation.py         PROFINET name / IPv4 suite rules
+  interfaces.py         domain interface/readiness descriptions and the mock interface
+  session.py            single composition root for the transport and services
   transport/            interface enumeration, Scapy transport and transport factory
-  services/             rate limit, capture, discovery, Get, Signal and guarded write
-  testrunner/           test catalogue (cases.py) and the runner engine
+  services/             rate limit, capture, correlation, discovery, Get, Signal and guarded write
+  testrunner/           test catalogue (cases.py), runner engine and handlers/
   pcap_io.py            classic Ethernet PCAP reader/writer
   reporting.py          JSON and escaped HTML reports
   safety.py             configuration-mode + confirmation guard
@@ -288,7 +296,7 @@ src/dcpstudio/
   config.py             non-sensitive UI preferences
   logging_setup.py      thread-safe structured event log
   utils.py              hexdump / JSON helper functions
-  gui/                  seven-tab PySide6 UI, presentation helpers, dialog, workers
+  gui/                  seven-tab PySide6 UI: app, controller, workers, presentation, tabs/
 tests/                  unit, integration-with-mock, GUI smoke and CLI tests
 docs/                   protocol, references, lab, troubleshooting, fixtures
 ```
@@ -298,8 +306,8 @@ docs/                   protocol, references, lab, troubleshooting, fixtures
 ## Known limitations
 
 - Read-only operation has been exercised against real hardware on an isolated
-  lab segment: Identify-All, unicast Identify, read-only Get and the 17
-  read-only functional tests.
+  lab segment: Identify-All, unicast Identify, read-only Get and the read-only
+  functional tests.
 - **State-changing paths were validated on one lab device** (vendor, model and
   identifiers withheld): Set NameOfStation and Set IP were acknowledged and read
   back with both temporary (`0x0000`) and permanent (`0x0001`) BlockQualifier;

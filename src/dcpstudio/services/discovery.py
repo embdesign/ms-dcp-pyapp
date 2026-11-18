@@ -24,8 +24,10 @@ from ..model import (
     iso_utc,
     utc_now,
 )
+from ..outcomes import TransactionOutcome
 from ..transport.base import CaptureNotStarted, DcpTransport, TransportError
 from ..validation import validate_station_name
+from .correlation import PendingRequest, collect_until_deadline
 from .rate_limit import RequestRateLimiter
 
 EventLog = Callable[[str, str, dict], None]
@@ -47,16 +49,10 @@ class DiscoveryConfig:
 
 
 @dataclass(slots=True)
-class _Pending:
-    xid: int
-    deadline_monotonic: float
-    request_monotonic: float
-    request_tx_utc: datetime
-    target_mac: str | None
+class _Pending(PendingRequest):
+    """An Identify request plus the devices collected for it."""
+
     devices: dict[tuple[str, str], DeviceIdentity] = field(default_factory=dict)
-    transactions: list[TransactionRecord] = field(default_factory=list)
-    duplicate_responses: int = 0
-    unmatched_responses: int = 0
     late_responses: int = 0
 
 
@@ -130,7 +126,7 @@ class DiscoveryService:
                         timestamp=timestamp,
                         event="identify_response",
                         interface_id=self.transport.interface.id,
-                        outcome="unrelated_response_ignored",
+                        outcome=TransactionOutcome.UNRELATED_RESPONSE_IGNORED,
                         detail=f"Response destination {frame.dst_mac} is not this interface",
                         xid=frame.xid,
                         service="Identify",
@@ -151,7 +147,7 @@ class DiscoveryService:
                     timestamp=timestamp,
                     event="identify_response",
                     interface_id=self.transport.interface.id,
-                    outcome="unrelated_response_ignored",
+                    outcome=TransactionOutcome.UNRELATED_RESPONSE_IGNORED,
                     detail=f"Identify response Xid 0x{(frame.xid or 0):08x} does not match request",
                     xid=frame.xid,
                     service="Identify",
@@ -167,7 +163,7 @@ class DiscoveryService:
                     timestamp=timestamp,
                     event="identify_response",
                     interface_id=self.transport.interface.id,
-                    outcome="unrelated_response_ignored",
+                    outcome=TransactionOutcome.UNRELATED_RESPONSE_IGNORED,
                     detail=f"Unicast Identify target was {target}, response came from {frame.src_mac}",
                     xid=xid,
                     service="Identify",
@@ -199,7 +195,11 @@ class DiscoveryService:
                 timestamp=timestamp,
                 event="identify_response",
                 interface_id=self.transport.interface.id,
-                outcome="late_response" if late else "matching_response_received",
+                outcome=(
+                    TransactionOutcome.LATE_RESPONSE
+                    if late
+                    else TransactionOutcome.MATCHING_RESPONSE_RECEIVED
+                ),
                 detail=(
                     f"{identity.display_name}, IP {identity.ip_text}, "
                     f"Vendor/Device {identity.vendor_device_text}"
@@ -318,7 +318,7 @@ class DiscoveryService:
                 timestamp=pending.request_tx_utc,
                 event="identify_request",
                 interface_id=interface.id,
-                outcome="transmitted",
+                outcome=TransactionOutcome.TRANSMITTED,
                 detail=(
                     f"Identify {'unicast to ' + cfg.unicast_mac if cfg.unicast_mac else 'multicast'}"
                     + (
@@ -346,28 +346,19 @@ class DiscoveryService:
             },
         )
 
-        last_progress = 0.0
-        while True:
-            if cancel_event.is_set():
-                break
-            remaining = pending.deadline_monotonic - time.monotonic()
-            if remaining <= -LATE_RESPONSE_GRACE_S:
-                break
-            if progress and remaining > 0 and (time.monotonic() - last_progress) > 0.25:
-                last_progress = time.monotonic()
-                progress(f"Listening… {remaining:.1f} s remaining")
-            time.sleep(min(0.05, max(0.0, remaining) if remaining > 0 else 0.02))
+        collect_until_deadline(
+            pending,
+            cancel_event,
+            grace_s=LATE_RESPONSE_GRACE_S,
+            progress=progress,
+            progress_text=lambda remaining: f"Listening… {remaining:.1f} s remaining",
+        )
 
         cancelled = cancel_event.is_set()
         with self._lock:
             self._pending = None
             devices = list(pending.devices.values())
-            # Windows' clock granularity can make the request and a fast
-            # response share a timestamp, so break ties by event kind.
-            transactions = sorted(
-                pending.transactions,
-                key=lambda t: (t.timestamp, 0 if t.outcome == "transmitted" else 1),
-            )
+            transactions = pending.ordered_transactions()
             duplicate_responses = pending.duplicate_responses
             unmatched = pending.unmatched_responses
             late = pending.late_responses
@@ -391,7 +382,7 @@ class DiscoveryService:
                     timestamp=finished,
                     event="identify_timeout",
                     interface_id=interface.id,
-                    outcome="outcome_unknown",
+                    outcome=TransactionOutcome.OUTCOME_UNKNOWN,
                     detail="No matching Identify response within the configured window",
                     xid=xid,
                     service="Identify",

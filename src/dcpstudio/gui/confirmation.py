@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import html
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -14,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..html_render import esc, li_items
 from ..safety import ConfirmationRequest
 from ..services.write import WriteAuthorization
 
@@ -61,11 +60,11 @@ class ConfirmationDialog(QDialog):
 
         interface_label = request.interface_name or request.interface_id
         summary = QLabel(
-            f"<b>Interface:</b> {html.escape(interface_label)} "
-            f"(<code>{html.escape(request.interface_id)}</code>)<br>"
-            f"<b>Target MAC:</b> <code>{html.escape(request.target_mac)}</code><br>"
-            f"<b>Current identity:</b> {html.escape(request.target_identity)}<br>"
-            f"<b>Operation:</b> {html.escape(request.operation_text)}"
+            f"<b>Interface:</b> {esc(interface_label)} "
+            f"(<code>{esc(request.interface_id)}</code>)<br>"
+            f"<b>Target MAC:</b> <code>{esc(request.target_mac)}</code><br>"
+            f"<b>Current identity:</b> {esc(request.target_identity)}<br>"
+            f"<b>Operation:</b> {esc(request.operation_text)}"
         )
         summary.setWordWrap(True)
         summary.setTextFormat(Qt.TextFormat.RichText)
@@ -73,7 +72,7 @@ class ConfirmationDialog(QDialog):
 
         if request.proposed_parameters:
             parameters = "<br>".join(
-                f"<b>{html.escape(str(key))}:</b> {html.escape(str(value))}"
+                f"<b>{esc(key)}:</b> {esc(value)}"
                 for key, value in request.proposed_parameters.items()
             )
             params = QLabel(parameters)
@@ -87,7 +86,7 @@ class ConfirmationDialog(QDialog):
         if request.consequences:
             consequences = QLabel(
                 "<b>Consequences</b><ul>"
-                + "".join(f"<li>{html.escape(item)}</li>" for item in request.consequences)
+                + li_items(request.consequences)
                 + "</ul>"
             )
             consequences.setWordWrap(True)

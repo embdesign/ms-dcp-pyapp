@@ -5,10 +5,11 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QScrollArea, QTableWidget  # noqa: E402
 
 from dcpstudio.gui.app import create_application  # noqa: E402
 from dcpstudio.gui.main_window import MainWindow  # noqa: E402
+from dcpstudio.gui.tabs.reset import RESET_TABLE_MIN_HEIGHT  # noqa: E402
 from dcpstudio.safety import ConfirmationRequest  # noqa: E402
 from dcpstudio.services.discovery import DiscoveryConfig  # noqa: E402
 from dcpstudio.services.get import GET_PRESETS, GetConfig  # noqa: E402
@@ -18,6 +19,7 @@ from dcpstudio.services.write import (  # noqa: E402
     WriteRequest,
     identity_text,
 )
+from dcpstudio.testrunner.cases import TEST_CASES, TEST_GROUPS  # noqa: E402
 
 
 def _app() -> QApplication:
@@ -29,14 +31,16 @@ def test_window_has_seven_tabs_and_guarded_state_changing_controls():
     window = MainWindow()
     try:
         assert window.tabs.count() == 7
+        # Tab text is compared as set: Qt requires '&&' to display a literal
+        # '&', because a single '&' introduces a mnemonic.
         assert [window.tabs.tabText(i) for i in range(7)] == [
-            "Interfaces & Discovery",
+            "Interfaces && Discovery",
             "Device Details",
             "Configuration",
             "Reset",
             "Test Runner",
             "Packet Capture",
-            "Logs & Reports",
+            "Logs && Reports",
         ]
         assert window.apply_name_button.isEnabled() is False
         assert window.apply_ip_button.isEnabled() is False
@@ -46,12 +50,25 @@ def test_window_has_seven_tabs_and_guarded_state_changing_controls():
         assert window.cancel_reset_button.isEnabled() is False
         assert window.config_mode_button.isEnabled() is True
         assert window.safety_gate.configuration_mode is False
-        assert window.test_table.rowCount() == 20
-        # No test is preselected: the operator chooses what to run.
+        # The catalogue is rendered grouped: one header row per category plus
+        # one row per test, and every test starts deselected.
+        assert window.test_table.columnCount() == 5
+        assert len(window._test_row_by_id) == len(TEST_CASES) == 21
+        assert len(window._group_row_by_category) == len(TEST_GROUPS) == 6
         assert all(
             window.test_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
-            for row in range(window.test_table.rowCount())
+            for row in window._test_row_by_id.values()
         )
+        assert all(
+            window.test_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
+            for row in window._group_row_by_category.values()
+        )
+        assert window.run_suite_button.text() == "Run device validation suite"
+        assert window.suite_preset_combo.currentData() is None
+        assert window.suite_preset_combo.count() == 5
+        assert window.dut_combo.count() == 1
+        assert window.test_write_declaration_label.isHidden()
+        assert "0 of" in window.test_selection_label.text()
         assert window.reset_mode_combo.count() == 5
         assert window.reset_mode_combo.itemData(4) == "legacy"
         assert window.current_interface is None
@@ -62,6 +79,58 @@ def test_window_has_seven_tabs_and_guarded_state_changing_controls():
         assert window.current_interface.kind == "mock"
         assert window.discover_button.isEnabled() is True
         app.processEvents()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_configuration_tab_scrolls_instead_of_squeezing_fields():
+    """The Configuration page keeps its fields at full height.
+
+    At the window minimum size the form is taller than the tab pane. Without a
+    scroll area the layout compressed the line edits below their text height
+    (the IP and subnet fields reached height 0), so the page is now a
+    scrollable form and the pane scrolls instead.
+    """
+    app = _app()
+    window = MainWindow()
+    try:
+        window.show()
+        window.resize(1100, 760)
+        window.tabs.setCurrentIndex(2)
+        app.processEvents()
+        page = window.tabs.widget(2)
+        assert isinstance(page, QScrollArea)
+        assert page.widgetResizable() is True
+        assert page.verticalScrollBar().isVisible() is True
+        for edit in (
+            window.name_edit,
+            window.ip_edit,
+            window.mask_edit,
+            window.gateway_edit,
+        ):
+            assert edit.height() >= edit.minimumSizeHint().height()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_reset_tab_scrolls_and_keeps_its_mode_table_readable():
+    """The Reset page scrolls instead of squeezing its reset-mode table."""
+    app = _app()
+    window = MainWindow()
+    try:
+        window.show()
+        window.resize(1100, 760)
+        window.tabs.setCurrentIndex(3)
+        app.processEvents()
+        page = window.tabs.widget(3)
+        assert isinstance(page, QScrollArea)
+        assert page.widgetResizable() is True
+        table = page.widget().findChild(QTableWidget)
+        assert table is not None
+        assert table.height() >= RESET_TABLE_MIN_HEIGHT
+        assert page.verticalScrollBar().isVisible() is True
     finally:
         window.close()
         app.processEvents()
@@ -166,13 +235,18 @@ def test_select_and_deselect_all_tests_buttons():
     try:
         assert window.select_all_tests_button.text() == "Select all tests"
         assert window.deselect_all_tests_button.text() == "Deselect all tests"
-        rows = list(range(window.test_table.rowCount()))
+        rows = list(window._test_row_by_id.values())
+        group_rows = list(window._group_row_by_category.values())
 
         window.deselect_all_tests_button.click()
         app.processEvents()
         assert all(
             window.test_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
             for row in rows
+        )
+        assert all(
+            window.test_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
+            for row in group_rows
         )
 
         window.select_all_tests_button.click()
@@ -182,10 +256,15 @@ def test_select_and_deselect_all_tests_buttons():
             for row in rows
             if window.test_table.item(row, 0).flags() & Qt.ItemFlag.ItemIsEnabled
         ]
-        assert len(selectable) == window.test_table.rowCount()
+        assert len(selectable) == len(TEST_CASES)
         assert all(
             window.test_table.item(row, 0).checkState() == Qt.CheckState.Checked
             for row in selectable
+        )
+        # Each category header follows its children.
+        assert all(
+            window.test_table.item(row, 0).checkState() == Qt.CheckState.Checked
+            for row in group_rows
         )
         # The optional guarded tests are selectable too; running them still
         # requires configuration mode, a target and per-operation confirmation.
@@ -197,4 +276,27 @@ def test_select_and_deselect_all_tests_buttons():
         assert guarded == {"write.set_name", "write.set_ip", "write.reset"}
     finally:
         window.close()
+        app.processEvents()
+
+
+def test_hex_dump_panels_use_a_fixed_width_font():
+    """Hex dumps must stay column-aligned despite the window style sheet.
+
+    ``MainWindow``'s style sheet assigns a proportional ``font-family`` to
+    every ``QWidget``, which overrides ``QWidget.setFont``. A proportional
+    face renders ``i`` far narrower than ``M``.
+    """
+    app = _app()
+    window = MainWindow()
+    try:
+        window.show()
+        app.processEvents()
+        for panel in (window.packet_detail, window.detail_hex):
+            metrics = panel.fontMetrics()
+            assert metrics.horizontalAdvance("i" * 8) == metrics.horizontalAdvance(
+                "M" * 8
+            ), f"hex dump resolved to {panel.font().family()!r}"
+    finally:
+        window.close()
+        window.deleteLater()
         app.processEvents()

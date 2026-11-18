@@ -16,6 +16,17 @@ from .constants import (
     SERVICE_TYPE_NAMES,
     SUBOPTION_NAMES,
 )
+from .outcomes import (
+    DiscoveryOutcome,
+    PostCheckState,
+    RequestState,
+    ResponseVerdict,
+    Verification,
+    discovery_outcome_text,
+    get_outcome_text,
+    verification_display_text,
+    write_outcome_text,
+)
 
 
 def utc_now() -> datetime:
@@ -387,23 +398,18 @@ class DiscoveryResult:
         return max(0.0, (self.finished_at - self.started_at).total_seconds() * 1000.0)
 
     @property
-    def outcome(self) -> str:
+    def outcome(self) -> DiscoveryOutcome:
         if self.error:
-            return "error"
+            return DiscoveryOutcome.ERROR
         if self.cancelled:
-            return "cancelled"
+            return DiscoveryOutcome.CANCELLED
         if not self.devices:
-            return "no_responses"
-        return "responses_received"
+            return DiscoveryOutcome.NO_RESPONSES
+        return DiscoveryOutcome.RESPONSES_RECEIVED
 
     @property
     def outcome_text(self) -> str:
-        return {
-            "error": "Error",
-            "cancelled": "Cancelled by user",
-            "no_responses": "No matching responses (outcome of discovery unknown)",
-            "responses_received": f"{len(self.devices)} device(s) responded",
-        }[self.outcome]
+        return discovery_outcome_text(self.outcome, len(self.devices))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -442,7 +448,7 @@ class GetResult:
     finished_at: datetime
     timeout_s: float
     vlan_id: int | None
-    state: str = "pending"
+    state: RequestState = RequestState.PENDING
     request_frame_hex: str = ""
     response_frame_hex: str = ""
     blocks: list[DcpBlock] = field(default_factory=list)
@@ -460,20 +466,12 @@ class GetResult:
         return max(0.0, (self.finished_at - self.started_at).total_seconds() * 1000.0)
 
     @property
-    def outcome(self) -> str:
+    def outcome(self) -> RequestState:
         return self.state
 
     @property
     def outcome_text(self) -> str:
-        return {
-            "pending": "Pending",
-            "response_received": "Get response received",
-            "late_response": "Get response received after the timeout",
-            "service_not_supported": "Device reports DCP Get as unsupported",
-            "no_response": "No matching response (outcome unknown)",
-            "cancelled": "Cancelled by user",
-            "error": "Error",
-        }.get(self.state, self.state)
+        return get_outcome_text(self.state)
 
     @property
     def block_error_text(self) -> str:
@@ -533,20 +531,20 @@ class WriteResult:
     finished_at: datetime
     timeout_s: float
     vlan_id: int | None
-    state: str = "pending"
+    state: RequestState = RequestState.PENDING
     permanent: bool | None = None
     block_qualifier: int | None = None
     reset_mode: int | None = None
     request_frame_hex: str = ""
     response_frame_hex: str = ""
     transmitted: bool = False
-    response_verdict: str | None = None
+    response_verdict: ResponseVerdict | None = None
     block_error: int | None = None
     before_identity: DeviceIdentity | None = None
     after_identity: DeviceIdentity | None = None
-    verification: str = "not_attempted"
+    verification: Verification = Verification.NOT_ATTEMPTED
     verification_detail: str = ""
-    post_check_state: str = "not_attempted"
+    post_check_state: PostCheckState = PostCheckState.NOT_ATTEMPTED
     post_check_detail: str = ""
     post_checked_at: datetime | None = None
     post_check_xid: int | None = None
@@ -564,42 +562,16 @@ class WriteResult:
         return max(0.0, (self.finished_at - self.started_at).total_seconds() * 1000.0)
 
     @property
-    def outcome(self) -> str:
+    def outcome(self) -> RequestState:
         return self.state
 
     @property
     def outcome_text(self) -> str:
-        if self.state == "acknowledged" and self.verification == "verified":
-            return "Acknowledged and independently read back"
-        if self.state == "acknowledged":
-            return "Acknowledged by device (completion not verified)"
-        if self.state == "cancelled" and self.transmitted:
-            return "Cancelled after transmission (outcome unknown)"
-        return {
-            "pending": "Pending",
-            "blocked": "Blocked by safety or validation checks",
-            "target_unverified": "Target could not be revalidated; no frame sent",
-            "rejected": "Device rejected the operation",
-            "service_not_supported": "Device reports DCP Set as unsupported",
-            "no_response": "No matching response (outcome unknown)",
-            "late_response": "Response arrived after the timeout",
-            "cancelled": "Cancelled by user",
-            "error": "Error",
-        }.get(self.state, self.state)
+        return write_outcome_text(self.state, self.verification, self.transmitted)
 
     @property
     def verification_text(self) -> str:
-        text = {
-            "not_attempted": "No independent read-back was performed.",
-            "verified": "Read-back matched the requested value.",
-            "mismatch": "Read-back did not match the requested value.",
-            "unknown": "Read-back was inconclusive; outcome unknown.",
-            "rejected": "Read-back reported a DCP block error.",
-            "service_not_supported": "Read-back reported Get as unsupported.",
-        }.get(self.verification, self.verification)
-        if self.verification_detail:
-            return f"{text} {self.verification_detail}"
-        return text
+        return verification_display_text(self.verification, self.verification_detail)
 
     @property
     def block_error_text(self) -> str:

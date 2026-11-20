@@ -1,19 +1,18 @@
 # DCP Studio
 
 A maintainable desktop application for **PROFINET DCP** device discovery,
-passive decoding, guarded configuration, reset testing, and functional testing.
+passive decoding, configuration, reset testing, and functional testing.
 
 Built with **Python 3.11+**, **PySide6**, **Scapy 2.8.0**, **uv**, and
 `pyproject.toml`. Runs natively on Linux and Windows; no Docker required.
 
 > **The delivered build implements the full documented capability set.** It
 > enumerates interfaces, passively decodes DCP, performs multicast/unicast
-> **Identify** and read-only **Get**, and provides explicitly enabled
-> **Set NameOfStation**, **Set IP parameters**, and
-> **ResetToFactorySettings** variants. State-changing operations require
-> configuration mode, an explicit confirmation (per operation in the
+> **Identify** and **Get**, and provides **Set NameOfStation**, **Set IP
+> parameters**, and **ResetToFactorySettings** variants. Every state-changing
+> operation requires an explicit confirmation (per operation in the
 > Configuration/Reset tabs and the CLI; once per run for the declared device
-> under test in the Test Runner), fresh target revalidation, and never retry
+> under test in the Test Runner), fresh target revalidation, and never retries
 > automatically. No batch or broadcast path exists.
 
 ![DCP Studio main window: Interfaces & Discovery tab with interface list,
@@ -35,20 +34,24 @@ table](docs/pics/dcp_studio.png)
 - Shows MAC, NameOfStation, IP/mask/gateway, Vendor ID/Device ID, role,
   advertised DCP options, interface, and last-seen UTC.
 - Deduplicates by `(interface, MAC)` and merges partial responses.
+- **Monitors the segment** by repeating Identify at a configurable interval and
+  reporting added/removed devices and changes to NameOfStation, IP parameters,
+  device IDs, role, alias, instance and advertised DCP options. Read-only and
+  user-started; each cycle is one ordinary Identify transaction.
 - Preserves unknown blocks; handles truncated/malformed frames defensively.
 - Performs read-only **Get** reads for identity, IP, name, Device ID, role,
   options, alias, instance, OEM ID, and device initiative blocks, with explicit
   DCP block-error reporting.
-- Performs guarded **Set NameOfStation** and **Set IP parameters** with
+- Performs **Set NameOfStation** and **Set IP parameters** with
   temporary/permanent BlockQualifier selection and a read-back Get.
-- Performs guarded **ResetToFactorySettings** modes 1, 2, 4 and 8, and the older
+- Performs **ResetToFactorySettings** modes 1, 2, 4 and 8, and the older
   **legacy FactoryReset** (`05/05`, no mode field, full reset); every reset
-  requires configuration mode and an explicit confirmation. Modes 3 and 9
+  requires an explicit confirmation. Modes 3 and 9
   remain disabled because their semantics were not verified.
 - **Signals one selected device** (Control/Signal `05/03`, SignalValue `0x0100`)
   so its identification LED flashes. Signal stores nothing and interrupts
-  nothing, so it is **not** a guarded operation: it needs no configuration mode,
-  but it is still one unicast frame with no retry.
+  nothing, so it is **not** a state-changing operation: it needs no
+  confirmation, but it is still one unicast frame with no retry.
 - Provides structured logs, decoded block view, hex inspection, PCAP export and
   offline PCAP analysis.
 - Exports JSON and HTML reports with UTC timestamps, transaction identifiers,
@@ -61,6 +64,18 @@ table](docs/pics/dcp_studio.png)
 
 It does **not** implement PROFINET cyclic IO, controller commissioning, DCE-RPC/
 CM, firmware flashing, DHCP, or batch/broadcast state changes.
+
+Within DCP itself the omissions are deliberate and recorded in the support
+matrix: Hello is decoded but never sent, Set Full IP suite (`01/03`, DNS) and the
+DHCP option (`03/xx`) are not transmitted, Control Start/Stop multi-block
+transactions (`05/01`/`05/02`) are not used, and reset modes 3 and 9 are refused
+because their semantics were not verified. Get accepts arbitrary
+Option/SubOption selectors through the codec and `dcp-cli get --selector`; the
+GUI exposes presets only. Monitoring is user-started polling: it repeats the
+normal Identify request at a configured interval (minimum 1 s, still subject to
+the shared request limiter) and stops when the operator stops it or the cycle
+count is reached. It has no alerting, no history beyond the current run and no
+background scanning.
 
 See:
 
@@ -144,7 +159,7 @@ Select **`demo0 — Demo (mock) — offline simulated PROFINET segment`** in the
 interface table, press **Start capture**, then **Discover**. Three simulated
 devices respond. Select a device and use **Get blocks** to exercise read-only
 Get. Configuration and reset operations are simulated in memory by the mock,
-so the guarded UI and confirmation workflow can be exercised without hardware.
+so the write UI and confirmation workflow can be exercised without hardware.
 
 ### Command line interface
 
@@ -158,6 +173,7 @@ mock interface, which is also the default.
 uv run dcp-cli interfaces
 uv run dcp-cli interfaces --readiness
 uv run dcp-cli discover -i demo --timeout 2
+uv run dcp-cli monitor -i demo --interval 5 --cycles 3
 uv run dcp-cli get -i demo --mac 02:00:00:00:00:11 --preset identity
 uv run dcp-cli signal -i demo --mac 02:00:00:00:00:11
 uv run dcp-cli tests -i demo --list
@@ -165,30 +181,29 @@ uv run dcp-cli tests -i demo --select parser.fixture_decode
 uv run dcp-cli pcap capture.pcap --dcp-only
 ```
 
-Read-only commands (`interfaces`, `discover`, `get`, `pcap`) never change
-equipment. `signal` is the unguarded identification action: one unicast frame,
-rate-limited, never retried. `set-name`, `set-ip` and `reset` require **all
-three** safety flags — they are the CLI form of the GUI's configuration mode,
-authorization and safe-maintenance confirmations:
+Read-only commands (`interfaces`, `discover`, `monitor`, `get`, `pcap`) never
+change equipment. `signal` is the identification action: one unicast frame,
+rate-limited, never retried. `set-name`, `set-ip` and `reset` require **one**
+`--confirm` flag that covers authorization and the safe-maintenance state:
 
 ```bash
 uv run dcp-cli set-name -i enp0s8 --mac 02:00:00:00:00:11 \
-  --name line-02.conveyor --persistence permanent \
-  --enable-configuration --confirm --safe-maintenance
+  --name line-02.conveyor --persistence permanent --confirm
 uv run dcp-cli set-ip -i enp0s8 --mac 02:00:00:00:00:11 \
-  --ip 192.168.20.11 --mask 255.255.255.0 --gateway 192.168.20.1 \
-  --enable-configuration --confirm --safe-maintenance
-uv run dcp-cli reset -i enp0s8 --mac 02:00:00:00:00:11 --mode 8 \
-  --enable-configuration --confirm --safe-maintenance
+  --ip 192.168.20.11 --mask 255.255.255.0 --gateway 192.168.20.1 --confirm
+uv run dcp-cli reset -i enp0s8 --mac 02:00:00:00:00:11 --mode 8 --confirm
 ```
 
-Without all three flags the command prints the operation parameters and
+Without `--confirm` the command prints the operation parameters and
 consequences, refuses, and transmits nothing. At most one state-changing
-operation runs per invocation; there is no batch or broadcast path. A guarded
-command first performs one read-only unicast Identify to build the confirmation
-and revalidates the target again inside `WriteService` immediately before the
-single Set/Reset frame. `tests` deliberately refuses `write.*` test IDs; use
-the dedicated commands for state changes.
+operation runs per invocation; there is no batch or broadcast path. A
+state-changing command first performs one read-only Identify to build the
+confirmation and revalidates the target again inside `WriteService` immediately
+before the single Set/Reset frame; if the device ignores the unicast form, the
+revalidation falls back once to a NameOfStation-filtered multicast Identify and
+still requires the target MAC to match. `tests` runs the read-only checks by
+default; pass `--include-writes --confirm --mac MAC` (plus `--name`,
+`--ip/--mask` or `--reset-mode`) to run the `write.*` cases too.
 
 `--json` keeps stdout machine-readable (progress, operation text and report
 paths go to stderr). `--report PATH` writes the same JSON or escaped HTML report
@@ -201,11 +216,12 @@ or refusal, and `2` inconclusive/outcome unknown (no matching response).
 
 | Tab | Current behaviour |
 |---|---|
-| **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, optional NameOfStation filter, Identify discovery, device table |
-| **Device Details** | Identity summary, per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets, and **Signal device (flash LED)** — one unguarded `05/03` frame |
-| **Configuration** | Guarded NameOfStation and IPv4 Set operations with temporary/permanent qualifier, validation, per-operation confirmation, fresh target revalidation, and read-back verification |
-| **Reset** | Guarded ResetToFactorySettings modes 1, 2, 4 and 8 with the documented wire qualifier, plus the legacy FactoryReset (`05/05`, full reset, no mode field); per-operation confirmation and an optional read-only post-check |
-| **Test Runner** | Tests grouped by category (environment, offline parser/transactions/validation, live DCP, state-changing). Pick the device under test, then run the **device validation suite** (read-only checks plus one Set Name, one Set IP and one Reset) or the **full validation suite**; read-only presets and per-test selection are available too. The DUT selection plus the run button is the single authorization for the suite; configuration mode is still required and every frame is sent once, revalidated and read back |
+| **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, optional NameOfStation filter, Identify discovery, device table, and duplicate NameOfStation/IP warnings |
+| **Monitor** | Repeated read-only Identify at a configurable interval with added/removed/changed-device detection (NameOfStation, IP, role, IDs, alias, options) |
+| **Device Details** | Identity summary, per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets, and **Signal device (flash LED)** — one plain `05/03` frame |
+| **Configuration** | NameOfStation and IPv4 Set operations with temporary/permanent qualifier, validation, per-operation confirmation, fresh target revalidation, and read-back verification |
+| **Reset** | ResetToFactorySettings modes 1, 2, 4 and 8 with the documented wire qualifier, plus the legacy FactoryReset (`05/05`, full reset, no mode field); per-operation confirmation and an optional read-only post-check |
+| **Test Runner** | Tests grouped by category (environment, offline parser/transactions/validation, live DCP, state-changing). Pick the device under test, then run the **device validation suite** (read-only checks plus one Set Name, one Set IP and one Reset) or the **full validation suite**; read-only presets and per-test selection are available too. The DUT selection plus the run button is the single authorization for the suite; every frame is sent once, revalidated and read back |
 | **Packet Capture** | Live/offline frame list, DCP filter, hex detail, PCAP export/import |
 | **Logs & Reports** | Structured event log, transaction log, session summary, JSON/HTML export |
 
@@ -220,13 +236,16 @@ or refusal, and `2` inconclusive/outcome unknown (no matching response).
   (3 requests, rate-limited).
 - A missing response is **outcome unknown**, never proof that a device is absent
   or that an operation failed.
-- Configuration mode is off by default. Every Set/Reset requires explicit
-  authorization, safe-maintenance confirmation, and a fresh unicast Identify
-  revalidation immediately before transmission. **Signal is the one exception**:
+- Every Set/Reset requires explicit authorization, safe-maintenance confirmation,
+  and a fresh Identify revalidation immediately before transmission: unicast
+  first, and only for a device that ignores it a single NameOfStation-filtered
+  multicast Identify whose response must still carry the target MAC. There is
+  no separate arming step to remember. **Signal is the exception**:
   it changes no stored configuration, so it is a plain user-triggered action —
   still exactly one unicast frame, rate-limited, never retried.
 - Name/IP writes perform one read-only read-back Get. Reset acknowledgements are
-  not treated as proof of completion; the post-check proves reachability only.
+  not treated as proof of completion; the post-check polls one read-only
+  Identify for a bounded, cancellable window and proves reachability only.
 - There is no batch, broadcast, automatic rollback, or automatic retry path.
 - Use an isolated lab network for hardware tests.
 
@@ -246,18 +265,20 @@ The suite covers:
 - truncated, bad-length, non-DCP, and random-byte defensive parsing;
 - discovery dedupe, NameOfStation-filtered discovery, wrong-Xid/unrelated
   responses, late responses, timeouts, cancellation, rate limiting;
+- duplicate NameOfStation/IP detection (`protocol.address_conflicts`);
 - unicast Identify and before/after identity comparison (mock);
 - live read-only Get, offline Get request/response decode, and all documented
   block errors;
-- guarded Name/IP Set with temporary/permanent qualifiers, read-back
-  verification, rejection, timeout, configuration-mode and revalidation gates;
-- guarded ResetToFactorySettings acknowledgement and post-check;
+- Name/IP Set with temporary/permanent qualifiers, read-back
+  verification, rejection, timeout, authorization and revalidation gates,
+  including the NameOfStation-filtered multicast revalidation fallback;
+- ResetToFactorySettings acknowledgement and the bounded, polling post-check;
 - PCAP roundtrip and timestamp preservation;
 - JSON/HTML report content, write operations, schema version 2 metadata and HTML escaping;
-- safety gate, and the unguarded Signal path (`05/03`);
+- safety gate, and the Signal path (`05/03`);
 - headless CLI commands, exit codes, JSON output and report writing;
 - station-name/IP validation;
-- GUI smoke test (offscreen), mock discovery, and guarded write integration.
+- GUI smoke test (offscreen), mock discovery, and write integration.
 
 Fixtures are synthetic and documented in
 [`tests/fixtures/PROVENANCE.md`](tests/fixtures/PROVENANCE.md). Regenerate with:
@@ -280,23 +301,23 @@ src/dcpstudio/
   model.py              frames, blocks, devices, results, UTC helpers
   outcomes.py           typed outcome vocabulary and display texts
   html_render.py        one escaping/table-markup path for reports and GUI summaries
-  operations.py         guarded-operation catalogue (confirmation text + qualifier)
+  operations.py         operation catalogue (confirmation text + qualifier)
   validation.py         PROFINET name / IPv4 suite rules
   interfaces.py         domain interface/readiness descriptions and the mock interface
   session.py            single composition root for the transport and services
   transport/            interface enumeration, Scapy transport and transport factory
-  services/             rate limit, capture, correlation, discovery, Get, Signal and guarded write
+  services/             rate limit, capture, correlation, discovery, Get, Signal and write
   testrunner/           test catalogue (cases.py), runner engine and handlers/
   pcap_io.py            classic Ethernet PCAP reader/writer
   reporting.py          JSON and escaped HTML reports
-  safety.py             configuration-mode + confirmation guard
+  safety.py             per-operation confirmation and authorization guard
   mock.py               offline mock devices; simulates Set/Reset in memory
   fixtures.py           synthetic offline frames
   cli.py                headless CLI over the same services and safety gate
   config.py             non-sensitive UI preferences
   logging_setup.py      thread-safe structured event log
   utils.py              hexdump / JSON helper functions
-  gui/                  seven-tab PySide6 UI: app, controller, workers, presentation, tabs/
+  gui/                  eight-tab PySide6 UI: app, controller, workers, presentation, tabs/
 tests/                  unit, integration-with-mock, GUI smoke and CLI tests
 docs/                   protocol, references, lab, troubleshooting, fixtures
 ```
@@ -319,9 +340,11 @@ docs/                   protocol, references, lab, troubleshooting, fixtures
   executable on the Linux host used to build and test the project.
 - DCP is link-local; it does not cross routers and is bounded by VLANs and
   multicast filtering.
-- State-changing operations revalidate the target with a fresh **unicast**
-  Identify. Devices that do not answer unicast Identify cannot be configured or
-  reset by this build, even if they answer multicast discovery.
+- State-changing operations revalidate the target with a fresh **read-only**
+  Identify. When a device ignores unicast Identify, the revalidation falls back
+  once to a NameOfStation-filtered multicast Identify and requires the target
+  MAC to match. A device that answers neither form still cannot be configured or
+  reset; the outcome is `target_unverified` and nothing is transmitted.
 - DCP discovery cannot prove an IP address is unused.
 - A missing Get response is not proof that a device does not support the block;
   a device may also return an explicit DCP block error.
@@ -329,12 +352,16 @@ docs/                   protocol, references, lab, troubleshooting, fixtures
 - Name/IP Set, reset modes 1/2/4/8 and legacy FactoryReset (`05/05`) are
   implemented; modes 3 and 9 remain disabled because their semantics were not
   verified on hardware. Device support and erased scope remain vendor-dependent.
-- Signal (`05/03`) is implemented as an identification aid, not a guarded write:
+- Signal (`05/03`) is implemented as an identification aid, not a state change:
   it changes no configuration, and a device may or may not flash its LED. The
   acknowledgement is not proof that the LED was visible, so the on-screen result
   is deliberately short — "signal acknowledged" plus block error and round-trip
   time. The full record (Xid, frame hex, verification wording) stays in the
   event log.
+- Monitoring repeats Identify: it reports only the fields carried by Identify
+  responses, has no alerting, thresholds or history beyond the current run, and
+  a cycle with no answer is `no_responses`/`outcome_unknown`, not proof that the
+  device is absent.
 - Reports are operational evidence, **not** PROFINET conformance certificates.
 
 Captures and reports contain sensitive identifiers (MAC, station name, IP,

@@ -24,6 +24,7 @@ from .safety import SafetyGate
 from .services.capture import FrameRouter
 from .services.discovery import DiscoveryService
 from .services.get import GetService
+from .services.monitor import MonitorService
 from .services.rate_limit import RequestRateLimiter
 from .services.signal import SignalService
 from .services.write import WriteService
@@ -45,6 +46,7 @@ class SessionServices:
     getter: GetService
     writer: WriteService
     signal: SignalService | None
+    monitor: MonitorService
     safety: SafetyGate
 
     def close(self) -> None:
@@ -91,6 +93,7 @@ def build_services(
         if include_signal
         else None
     )
+    monitor = MonitorService(discovery, event_log=event_log)
 
     if register_listeners:
         listeners: list[FrameCallback] = [
@@ -113,6 +116,7 @@ def build_services(
         getter=getter,
         writer=writer,
         signal=signal,
+        monitor=monitor,
         safety=gate,
     )
 

@@ -1,7 +1,7 @@
 """DCP Signal (05/03) service tests.
 
-Signal is an identification aid: it must work without configuration mode, send
-exactly one unicast frame, and never be retried.
+Signal is an identification aid: it needs no confirmation, sends exactly one
+unicast frame, and is never retried.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ def _service(*, delay_s: float = 0.0) -> tuple[MockTransport, SignalService, str
     return transport, service, device.mac
 
 
-def test_signal_is_acknowledged_without_configuration_mode():
+def test_signal_is_acknowledged_without_confirmation():
     transport, service, mac = _service()
     try:
         result = service.signal(mac, timeout_s=0.5)

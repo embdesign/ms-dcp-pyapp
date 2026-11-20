@@ -6,7 +6,9 @@ import threading
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from ..constants import DEFAULT_POST_CHECK_WINDOW_S
 from ..model import WriteResult
+from ..monitor import MonitorConfig
 from ..pcap_io import analyze_pcap
 from ..services.discovery import DiscoveryConfig
 from ..services.get import GetConfig
@@ -82,6 +84,40 @@ class GetWorker(QThread):
                 progress=self.progress.emit,
             )
             self.finished_ok.emit(result)
+        except Exception as exc:
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+
+
+class MonitorWorker(QThread):
+    """Repeated Identify monitoring with per-cycle change reporting."""
+
+    cycle = Signal(object)
+    finished_ok = Signal(object)
+    failed = Signal(str)
+    progress = Signal(str)
+
+    def __init__(
+        self,
+        controller: SessionController,
+        config: MonitorConfig,
+        cancel_event: threading.Event,
+        *,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.controller = controller
+        self.config = config
+        self.cancel_event = cancel_event
+
+    def run(self) -> None:  # pragma: no cover - exercised via GUI/integration
+        try:
+            run = self.controller.monitor(
+                self.config,
+                cancel_event=self.cancel_event,
+                on_cycle=self.cycle.emit,
+                progress=self.progress.emit,
+            )
+            self.finished_ok.emit(run)
         except Exception as exc:
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
@@ -166,12 +202,14 @@ class PostCheckWorker(QThread):
         timeout_s: float,
         cancel_event: threading.Event,
         *,
+        window_s: float = DEFAULT_POST_CHECK_WINDOW_S,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self.controller = controller
         self.result = result
         self.timeout_s = timeout_s
+        self.window_s = window_s
         self.cancel_event = cancel_event
 
     def run(self) -> None:  # pragma: no cover - exercised via GUI/integration
@@ -179,6 +217,7 @@ class PostCheckWorker(QThread):
             result = self.controller.post_check(
                 self.result,
                 timeout_s=self.timeout_s,
+                recheck_window_s=self.window_s,
                 cancel_event=self.cancel_event,
                 progress=self.progress.emit,
             )

@@ -191,8 +191,9 @@ SIGNAL_VALUE_FLASH_ONCE = 0x0100
 # Mode 1, 2 and 4 have documented scope; mode 8 is the factory-reset variant.
 SUPPORTED_RESET_MODES: frozenset[int] = frozenset({0x0001, 0x0002, 0x0004, 0x0008})
 
-# Legacy sub-option 05 has no documented mode field; p-net performs a full
-# reset internally. It is listed only for completeness and is not implemented.
+# Legacy FactoryReset (05/05) *is* implemented and reachable from the Reset tab,
+# the CLI and the test runner: see ``codec.build_factory_reset_legacy_request``
+# and ``LEGACY_FACTORY_RESET_QUALIFIER`` above.
 
 # --------------------------------------------------------------------------
 # Block errors (Control/Response)
@@ -248,6 +249,11 @@ DEFAULT_RESPONSE_DELAY_FACTOR = 50  # up to 490 ms spread
 
 # Conservative client-side pacing. The GUI never scans continuously.
 DEFAULT_MIN_REQUEST_INTERVAL_S = 1.0
+
+# A reset may reboot the device, so the read-only post-check polls for this
+# long (bounded, cancellable, still rate-limited) before reporting "no
+# response". It is polling of a read-only Identify, never a write retry.
+DEFAULT_POST_CHECK_WINDOW_S = 40.0
 
 # Source-Address-Matching ("SAM") window used by conformant device stacks.
 DCP_SAM_WINDOW_S = 3.0

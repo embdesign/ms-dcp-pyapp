@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ...constants import DEFAULT_POST_CHECK_WINDOW_S
 from ...model import TestResult
 from ...operations import (
     OperationSpec,
@@ -10,8 +11,12 @@ from ...operations import (
     set_ip_spec,
     set_name_spec,
 )
-from ...services.discovery import DiscoveryConfig
-from ...services.write import WriteConfig, WriteRequest, identity_text
+from ...services.write import (
+    WriteConfig,
+    WriteRequest,
+    identity_text,
+    probe_target,
+)
 from ..cases import TestCase
 
 
@@ -37,8 +42,6 @@ class WriteHandlersMixin:
     ) -> tuple[WriteRequest | None, str]:
         if self.target is None:
             return None, "No target device was passed to the test runner."
-        if not self.safety_gate.configuration_mode:
-            return None, "Configuration mode is OFF; this test is skipped."
         authorization = self.write_authorizations.get(case.test_id)
         if authorization is None:
             return None, "No per-operation confirmation was supplied for this test."
@@ -56,6 +59,7 @@ class WriteHandlersMixin:
             confirmation=confirmation,
             authorization=authorization,
             config=self._write_config(),
+            target_name=self.target.name_of_station,
             **params,
         )
         return request, ""
@@ -72,21 +76,19 @@ class WriteHandlersMixin:
             return
         mac = self.target.mac
         try:
-            result = self._discovery().discover(
-                DiscoveryConfig(
-                    timeout_s=min(self.config.timeout_s, 3.0),
-                    response_delay_factor=self.config.response_delay_factor,
-                    vlan_id=self.config.vlan_id,
-                    unicast_mac=mac,
-                    min_request_interval_s=self.config.min_request_interval_s,
-                )
+            probe = probe_target(
+                self._discovery(),
+                target_mac=mac,
+                target_name=self.target.name_of_station,
+                timeout_s=min(self.config.timeout_s, 3.0),
+                vlan_id=self.config.vlan_id,
+                response_delay_factor=self.config.response_delay_factor,
+                min_request_interval_s=self.config.min_request_interval_s,
             )
         except Exception:
             return
-        for device in result.devices:
-            if device.mac.lower() == mac.lower():
-                self.target = device
-                return
+        if probe.device is not None:
+            self.target = probe.device
 
     def _write_outcome(self, case, result, *, reset: bool = False) -> TestResult:
         # The next state-changing step must revalidate against the *current*
@@ -170,7 +172,7 @@ class WriteHandlersMixin:
         name = params.get("name")
         if name is None:
             return self._result(
-                case, "skipped", "No NameOfStation test value was supplied by the GUI."
+                case, "skipped", "No NameOfStation test value was supplied by the caller."
             )
         permanent = bool(params.get("permanent", False))
         request, reason = self._prepare_guarded_write(
@@ -197,7 +199,7 @@ class WriteHandlersMixin:
         mask = params.get("subnet_mask")
         if not ip or not mask:
             return self._result(
-                case, "skipped", "No IPv4 test values were supplied by the GUI."
+                case, "skipped", "No IPv4 test values were supplied by the caller."
             )
         gateway = params.get("gateway", "")
         permanent = bool(params.get("permanent", False))
@@ -247,6 +249,7 @@ class WriteHandlersMixin:
             writer.post_check(
                 result,
                 timeout_s=max(0.5, min(float(self.config.timeout_s), 3.0)),
+                recheck_window_s=DEFAULT_POST_CHECK_WINDOW_S,
                 cancel_event=cancel_event,
             )
         return self._write_outcome(case, result, reset=True)

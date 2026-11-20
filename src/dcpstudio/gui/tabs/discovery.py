@@ -177,7 +177,9 @@ class DiscoveryTabMixin:
         for index, width in enumerate((140, 170, 120, 120, 120, 90, 90, 150, 190, 150, 190)):
             self.device_table.setColumnWidth(index, width)
         self.device_table.itemSelectionChanged.connect(self._on_device_selected)
-        self.device_table.doubleClicked.connect(lambda _index: self.tabs.setCurrentIndex(1))
+        self.device_table.doubleClicked.connect(
+            lambda _index: self.tabs.setCurrentWidget(self.device_tab)
+        )
         devices_layout.addWidget(self.device_table, 1)
         self.device_count_label = QLabel("0 device(s)")
         devices_layout.addWidget(self.device_count_label)
@@ -235,7 +237,6 @@ class DiscoveryTabMixin:
                 self.request_limiter = None
                 self.current_interface = None
                 self.last_readiness = None
-                self.safety_gate.disable_configuration_mode()
         finally:
             self._suppress_interface_signal = False
         if self.current_interface is not None:
@@ -269,6 +270,13 @@ class DiscoveryTabMixin:
             and self.transport is not None
         ):
             return
+        if self._monitor_running():
+            self._stop_monitor(silent=True)
+            worker = self.monitor_worker
+            if worker is not None:
+                worker.wait(3000)
+                worker.deleteLater()
+            self.monitor_worker = None
         self.controller.reset_session()
         self.capture.clear()
         self.transaction_table.setRowCount(0)
@@ -279,6 +287,11 @@ class DiscoveryTabMixin:
         self.packet_table.setRowCount(0)
         self.packet_detail.clear()
         self.packet_detail_label.setText("Select a frame to inspect it.")
+        self.monitor_changes_table.setRowCount(0)
+        self.monitor_changes_label.setText("0 change(s) recorded.")
+        self.monitor_cycle_label.setText("No cycles completed.")
+        self.monitor_state_label.setText("Idle. No monitor run yet.")
+        self.monitor_notes_label.setVisible(False)
         self.config_result_label.setText(
             "No configuration operation has been sent in this session."
         )
@@ -354,7 +367,13 @@ class DiscoveryTabMixin:
             return
         if self._discovery_running():
             return
-        if self._tests_running() or self._get_running() or self._write_running() or self._post_check_running():
+        if (
+            self._tests_running()
+            or self._get_running()
+            or self._write_running()
+            or self._post_check_running()
+            or self._monitor_running()
+        ):
             QMessageBox.information(
                 self,
                 "Another operation is running",

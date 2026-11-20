@@ -118,7 +118,6 @@ def test_guarded_set_name_runs_with_confirmation():
     device = default_mock_devices()[0]
     transport = MockTransport(MockNetwork([device]))
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     runner = TestRunner(
         transport,
         AppConfig(timeout_s=0.5, min_request_interval_s=0.05),
@@ -149,7 +148,6 @@ def test_guarded_reset_is_inconclusive_and_gets_post_checked():
     target = _target(device)
     transport = MockTransport(MockNetwork([device]))
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     runner = TestRunner(
         transport,
         AppConfig(timeout_s=0.5, min_request_interval_s=0.05),
@@ -262,7 +260,6 @@ def test_device_validation_suite_reads_and_writes_against_the_mock_network():
     device = default_mock_devices()[0]
     transport = MockTransport(MockNetwork([device]))
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     authorization = WriteAuthorization(
         authorization_confirmed=True,
         safe_maintenance_confirmed=True,

@@ -7,11 +7,10 @@ GUI uses. It adds no protocol behaviour of its own:
   change equipment;
 * ``signal`` is the unguarded identification action, one unicast frame, rate
   limited, never retried;
-* ``set-name``, ``set-ip`` and ``reset`` require all three explicit safety
-  flags (``--enable-configuration``, ``--confirm``, ``--safe-maintenance``),
-  a fresh read-only unicast Identify, and go through ``WriteService`` once;
-* ``tests`` runs only the read-only functional checks. Guarded test cases are
-  deliberately refused here; use the dedicated commands instead.
+* ``set-name``, ``set-ip`` and ``reset`` require an explicit ``--confirm``,
+  perform a fresh unicast Identify, and go through ``WriteService`` once;
+* ``tests`` runs the read-only functional checks by default. The state-changing
+  ``write.*`` cases run only with ``--include-writes --confirm --mac``.
 
 Operator-facing text and parameters come from :mod:`dcpstudio.operations`, so
 the consequences shown by the CLI cannot drift from the GUI.
@@ -32,11 +31,19 @@ from .codec import parse_mac
 from .config import AppConfig
 from .constants import (
     DEFAULT_MIN_REQUEST_INTERVAL_S,
+    DEFAULT_POST_CHECK_WINDOW_S,
     DEFAULT_RESPONSE_DELAY_FACTOR,
     SUPPORTED_RESET_MODES,
 )
 from .logging_setup import EventLogger
 from .model import DeviceIdentity, DiscoveryResult, GetResult, WriteResult, iso_utc
+from .monitor import (
+    MAX_MONITOR_CYCLES,
+    MAX_MONITOR_INTERVAL_S,
+    MIN_MONITOR_INTERVAL_S,
+    MonitorConfig,
+    MonitorRun,
+)
 from .operations import (
     OperationSpec,
     confirmation_for,
@@ -50,6 +57,7 @@ from .reporting import ReportContext, summarize_statuses, write_html_report, wri
 from .services.capture import FrameRouter
 from .services.discovery import DiscoveryConfig, DiscoveryService
 from .services.get import GET_PRESETS, GetConfig, GetService
+from .services.monitor import MonitorService
 from .services.signal import SignalService
 from .services.write import (
     WriteAuthorization,
@@ -82,7 +90,18 @@ EXIT_FAILED = 1
 EXIT_UNKNOWN = 2
 
 CLI_COMMANDS = frozenset(
-    {"interfaces", "discover", "get", "signal", "set-name", "set-ip", "reset", "tests", "pcap"}
+    {
+        "interfaces",
+        "discover",
+        "monitor",
+        "get",
+        "signal",
+        "set-name",
+        "set-ip",
+        "reset",
+        "tests",
+        "pcap",
+    }
 )
 
 _Progress = Callable[[str], None] | None
@@ -253,6 +272,10 @@ class _Session:
         assert self._services.signal is not None
         return self._services.signal
 
+    @property
+    def monitor(self) -> MonitorService:
+        return self._services.monitor
+
     def __enter__(self) -> _Session:
         self.transport.start_capture()
         return self
@@ -330,6 +353,40 @@ def _print_get(result: GetResult) -> None:
         print(f"Error: {result.error}")
     for warning in result.warnings:
         print(f"warning: {warning}", file=sys.stderr)
+
+
+def _print_monitor(run: MonitorRun) -> None:
+    config = run.config
+    print(
+        f"Monitor on {run.interface_id} — {len(run.cycles)} cycle(s), "
+        f"{len(run.changes)} change(s)"
+    )
+    print(
+        f"Interval {config.interval_s:.1f} s, timeout {config.timeout_s:.1f} s, "
+        f"ResponseDelayFactor {config.response_delay_factor}"
+    )
+    for cycle in run.cycles:
+        print(
+            f"  cycle {cycle.index + 1}: {cycle.device_count} device(s) — "
+            f"{cycle.outcome_text} ({cycle.duration_ms:.0f} ms)"
+        )
+    if run.changes:
+        print()
+        print(f"{'Time (UTC)':<24}  {'Change':<8}  {'MAC':<17}  {'Name':<20}  Detail")
+        for change in run.changes:
+            detail = (
+                f"{change.field_label}: {change.before} -> {change.after}"
+                if change.field is not None
+                else change.device_text
+            )
+            print(
+                f"{iso_utc(change.timestamp) or '':<24}  {str(change.kind):<8}  "
+                f"{change.mac:<17}  {change.device_text:<20}  {detail}"
+            )
+    if run.cancelled:
+        print("Monitor stopped before all planned cycles completed.")
+    if run.error:
+        print(f"Error: {run.error}")
 
 
 def _print_write(result: WriteResult) -> None:
@@ -478,6 +535,49 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         return _discovery_exit_code(result)
 
 
+def _cmd_monitor(args: argparse.Namespace) -> int:
+    _validate_common(args, discovery=True)
+    interval = float(args.interval)
+    if not MIN_MONITOR_INTERVAL_S <= interval <= MAX_MONITOR_INTERVAL_S:
+        raise _CliError(
+            f"--interval must be {MIN_MONITOR_INTERVAL_S:.0f}.."
+            f"{MAX_MONITOR_INTERVAL_S:.0f} seconds"
+        )
+    cycles = int(args.cycles)
+    if not 0 <= cycles <= MAX_MONITOR_CYCLES:
+        raise _CliError(f"--cycles must be 0..{MAX_MONITOR_CYCLES} (0 = until interrupted)")
+    config = MonitorConfig(
+        interval_s=interval,
+        timeout_s=float(args.timeout),
+        response_delay_factor=int(args.response_delay_factor),
+        vlan_id=getattr(args, "vlan", None),
+        cycles=cycles,
+    )
+    interface = _resolve_interface(args.interface)
+    quiet = bool(getattr(args, "quiet", False))
+
+    def on_cycle(cycle) -> None:
+        if quiet or args.json:
+            return
+        print(
+            f"… cycle {cycle.index + 1}: {cycle.device_count} device(s), "
+            f"{len(cycle.changes)} change(s), {cycle.outcome_text}",
+            file=sys.stderr,
+        )
+
+    with _Session(interface, min_interval_s=args.min_interval) as session:
+        run = session.monitor.run(
+            config,
+            on_cycle=on_cycle,
+            progress=_progress(args),
+        )
+        if args.json:
+            _emit_json(run.to_dict())
+        else:
+            _print_monitor(run)
+        return EXIT_FAILED if run.error else EXIT_OK
+
+
 def _cmd_get(args: argparse.Namespace) -> int:
     _validate_common(args, discovery=False)
     mac = _validated_mac(args.mac)
@@ -524,14 +624,7 @@ def _cmd_signal(args: argparse.Namespace) -> int:
 
 
 def _guards_missing(args: argparse.Namespace) -> list[str]:
-    missing: list[str] = []
-    if not args.enable_configuration:
-        missing.append("--enable-configuration")
-    if not args.confirm:
-        missing.append("--confirm")
-    if not args.safe_maintenance:
-        missing.append("--safe-maintenance")
-    return missing
+    return [] if args.confirm else ["--confirm"]
 
 
 def _identify_target(
@@ -637,7 +730,6 @@ def _run_guarded(
             target_mac=target_mac,
             target_identity=identity_text(target),
         )
-        session.writer.safety.enable_configuration_mode(explicit_authorization=True)
         request = WriteRequest(
             kind=kind,
             target_mac=target_mac,
@@ -647,6 +739,7 @@ def _run_guarded(
                 safe_maintenance_confirmed=True,
             ),
             config=_write_config(args),
+            target_name=target.name_of_station,
             **parameters,
         )
         result = session.writer.execute(request, progress=_progress(args))
@@ -654,6 +747,7 @@ def _run_guarded(
             session.writer.post_check(
                 result,
                 timeout_s=float(args.timeout),
+                recheck_window_s=DEFAULT_POST_CHECK_WINDOW_S,
                 progress=_progress(args),
             )
         _maybe_write_report(args, session, write_result=result)
@@ -726,6 +820,34 @@ def _cmd_reset(args: argparse.Namespace) -> int:
     )
 
 
+def _write_test_parameters(args: argparse.Namespace) -> dict[str, dict]:
+    """Collect the operator-supplied values for the ``write.*`` test cases."""
+    parameters: dict[str, dict] = {}
+    if args.name is not None:
+        report = validate_station_name(args.name)
+        if not report.ok:
+            raise _CliError(f"Invalid NameOfStation: {report.summary()}")
+        parameters["write.set_name"] = {
+            "name": args.name,
+            "permanent": args.persistence == "permanent",
+        }
+    if args.ip is not None or args.mask is not None:
+        if args.ip is None or args.mask is None:
+            raise _CliError("--ip and --mask must be supplied together")
+        report = validate_ip_suite(args.ip, args.mask, args.gateway or "0.0.0.0")
+        if not report.ok:
+            raise _CliError(f"Invalid IPv4 suite: {report.summary()}")
+        parameters["write.set_ip"] = {
+            "ip_address": args.ip,
+            "subnet_mask": args.mask,
+            "gateway": args.gateway or "0.0.0.0",
+            "permanent": args.persistence == "permanent",
+        }
+    if args.reset_mode is not None:
+        parameters["write.reset"] = {"reset_mode": int(args.reset_mode)}
+    return parameters
+
+
 def _cmd_tests(args: argparse.Namespace) -> int:
     _validate_common(args, discovery=True)
     if args.list:
@@ -747,19 +869,51 @@ def _cmd_tests(args: argparse.Namespace) -> int:
         selected = {
             case.test_id
             for case in TEST_CASES
-            if case.default_enabled and case.implemented
+            if case.implemented
+            and (
+                case.default_enabled
+                or (args.include_writes and case.test_id.startswith("write."))
+            )
         }
     guarded = sorted(test_id for test_id in selected if test_id.startswith("write."))
-    if guarded:
+    if guarded and not args.include_writes:
         raise _CliError(
-            "The CLI test runner performs read-only checks only; "
+            "This selection contains state-changing test(s): "
             + ", ".join(guarded)
-            + " is a guarded operation. Use 'dcp-cli set-name', 'set-ip' or 'reset'."
+            + ". Pass --include-writes with --confirm and --mac to run them, or use "
+            "'dcp-cli set-name', 'set-ip' or 'reset'."
         )
+
+    target: DeviceIdentity | None = None
+    write_authorizations: dict[str, WriteAuthorization] = {}
+    write_parameters: dict[str, dict] = {}
+    if guarded:
+        if not args.confirm:
+            raise _CliError("--include-writes requires --confirm. Nothing was transmitted.")
+        if not args.mac:
+            raise _CliError(
+                "--include-writes requires --mac: the write tests target exactly one "
+                "declared device under test. Nothing was transmitted."
+            )
+        write_parameters = _write_test_parameters(args)
+        write_authorizations = {
+            test_id: WriteAuthorization(
+                authorization_confirmed=True,
+                safe_maintenance_confirmed=True,
+            )
+            for test_id in guarded
+        }
 
     interface = _resolve_interface(args.interface)
     config = _app_config(args, interface)
     with _Session(interface, min_interval_s=args.min_interval) as session:
+        if guarded:
+            target = _identify_target(session, _validated_mac(args.mac), args)
+            if target is None:
+                raise _CliError(
+                    "The declared device under test did not answer a unicast Identify; "
+                    "no state-changing frame was transmitted."
+                )
         runner = TestRunner(
             session.transport,
             config,
@@ -768,6 +922,9 @@ def _cmd_tests(args: argparse.Namespace) -> int:
             get_service=session.getter,
             write_service=session.writer,
             safety_gate=session.writer.safety,
+            target=target,
+            write_authorizations=write_authorizations,
+            write_parameters=write_parameters,
         )
         results = runner.run(
             selected,
@@ -838,6 +995,7 @@ def _add_interface_arguments(
     *,
     timeout: float,
     with_delay_factor: bool = True,
+    with_report: bool = True,
 ) -> None:
     parser.add_argument(
         "-i",
@@ -870,28 +1028,22 @@ def _add_interface_arguments(
     )
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress messages")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
-    parser.add_argument(
-        "--report",
-        metavar="PATH",
-        help="Write a JSON report (or escaped HTML when PATH ends in .html/.htm)",
-    )
+    if with_report:
+        parser.add_argument(
+            "--report",
+            metavar="PATH",
+            help="Write a JSON report (or escaped HTML when PATH ends in .html/.htm)",
+        )
 
 
 def _add_guard_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--enable-configuration",
-        action="store_true",
-        help="Explicitly enable configuration mode for this invocation (required)",
-    )
-    parser.add_argument(
         "--confirm",
         action="store_true",
-        help="Confirm authorization to change this equipment (required)",
-    )
-    parser.add_argument(
-        "--safe-maintenance",
-        action="store_true",
-        help="Confirm the equipment is in a safe maintenance state (required)",
+        help=(
+            "Confirm authorization for this state change and that the equipment is "
+            "in a safe maintenance state (required)"
+        ),
     )
 
 
@@ -899,9 +1051,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dcp-cli",
         description=(
-            "Headless PROFINET DCP discovery, read-only Get, LED Signal, guarded "
+            "Headless PROFINET DCP discovery, Get, LED Signal, confirmed "
             "Set/Reset, functional checks and offline PCAP analysis. "
-            "State-changing commands require all three safety flags and send one "
+            "State-changing commands require --confirm and send one "
             "unicast frame without retry."
         ),
     )
@@ -933,6 +1085,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     discover.set_defaults(handler=_cmd_discover)
 
+    monitor = subparsers.add_parser(
+        "monitor",
+        help="Repeat Identify at an interval and report identity changes (read-only)",
+    )
+    _add_interface_arguments(monitor, timeout=3.0, with_report=False)
+    monitor.add_argument(
+        "--interval",
+        type=float,
+        default=5.0,
+        help="Minimum seconds between Identify cycles (default: 5.0)",
+    )
+    monitor.add_argument(
+        "--cycles",
+        type=int,
+        default=1,
+        help="Number of Identify cycles; 0 runs until interrupted (default: 1)",
+    )
+    monitor.set_defaults(handler=_cmd_monitor)
+
     get = subparsers.add_parser("get", help="Read DCP blocks from one device (read-only)")
     _add_interface_arguments(get, timeout=2.0)
     get.add_argument("--mac", required=True, metavar="MAC", help="Target device MAC")
@@ -958,7 +1129,7 @@ def build_parser() -> argparse.ArgumentParser:
     signal.set_defaults(handler=_cmd_signal)
 
     set_name = subparsers.add_parser(
-        "set-name", help="Guarded Set NameOfStation (configuration mode + confirmation)"
+        "set-name", help="Set NameOfStation (--confirm)"
     )
     _add_interface_arguments(set_name, timeout=2.0)
     set_name.add_argument("--mac", required=True, metavar="MAC", help="Target device MAC")
@@ -978,7 +1149,7 @@ def build_parser() -> argparse.ArgumentParser:
     set_name.set_defaults(handler=_cmd_set_name)
 
     set_ip = subparsers.add_parser(
-        "set-ip", help="Guarded Set IP parameters (configuration mode + confirmation)"
+        "set-ip", help="Set IP parameters (--confirm)"
     )
     _add_interface_arguments(set_ip, timeout=2.0)
     set_ip.add_argument("--mac", required=True, metavar="MAC", help="Target device MAC")
@@ -997,7 +1168,7 @@ def build_parser() -> argparse.ArgumentParser:
     set_ip.set_defaults(handler=_cmd_set_ip)
 
     reset = subparsers.add_parser(
-        "reset", help="Guarded reset: RTFS modes 1/2/4/8 or legacy 05/05"
+        "reset", help="Reset: RTFS modes 1/2/4/8 or legacy 05/05 (--confirm)"
     )
     _add_interface_arguments(reset, timeout=2.0)
     reset.add_argument("--mac", required=True, metavar="MAC", help="Target device MAC")
@@ -1017,7 +1188,8 @@ def build_parser() -> argparse.ArgumentParser:
     reset.set_defaults(handler=_cmd_reset)
 
     tests = subparsers.add_parser(
-        "tests", help="Run read-only functional checks (guarded cases are refused)"
+        "tests",
+        help="Run functional checks; write.* needs --include-writes --confirm --mac",
     )
     _add_interface_arguments(tests, timeout=3.0)
     tests.add_argument("--list", action="store_true", help="List available test cases and exit")
@@ -1026,6 +1198,49 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="ID",
         help="Run only the given test id; may be repeated",
+    )
+    tests.add_argument(
+        "--include-writes",
+        action="store_true",
+        help=(
+            "Add the write.* cases to the default selection and allow them to run "
+            "against the --mac target (requires --confirm)"
+        ),
+    )
+    tests.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Confirm the state-changing test run (required with --include-writes)",
+    )
+    tests.add_argument(
+        "--mac", metavar="MAC", help="Declared device under test for write.* cases"
+    )
+    tests.add_argument(
+        "--name", metavar="NAME", help="NameOfStation value for write.set_name"
+    )
+    tests.add_argument(
+        "--persistence",
+        choices=("permanent", "temporary"),
+        default="permanent",
+        help="BlockQualifier persistence for write.set_name/write.set_ip",
+    )
+    tests.add_argument(
+        "--ip", metavar="ADDRESS", help="IPv4 address for write.set_ip"
+    )
+    tests.add_argument(
+        "--mask", metavar="MASK", help="Subnet mask for write.set_ip"
+    )
+    tests.add_argument(
+        "--gateway",
+        default="0.0.0.0",
+        metavar="ADDRESS",
+        help="Gateway for write.set_ip (default: 0.0.0.0)",
+    )
+    tests.add_argument(
+        "--reset-mode",
+        type=int,
+        choices=sorted(SUPPORTED_RESET_MODES),
+        help="ResetToFactorySettings mode for write.reset",
     )
     tests.set_defaults(handler=_cmd_tests)
 

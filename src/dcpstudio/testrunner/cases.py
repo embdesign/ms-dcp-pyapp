@@ -19,8 +19,8 @@ Grouping rules:
 * A **suite** is a named subset of test IDs. The device validation suites
   include the state-changing ``write.*`` tests, because a device is not
   validated until Set Name, Set IP and Reset have been attempted against it.
-  ``TestSuite.sends_writes`` tells the caller that a suite needs configuration
-  mode and a declared device under test. ``DEVICE_READ_ONLY_SUITE`` and
+  ``TestSuite.sends_writes`` tells the caller that a suite needs a declared
+  device under test and write authorization. ``DEVICE_READ_ONLY_SUITE`` and
   ``TOOL_SELF_TEST_SUITE`` never transmit a state-changing frame.
 """
 
@@ -96,8 +96,8 @@ TEST_GROUPS: tuple[tuple[str, str], ...] = (
     ),
     (
         "State-changing (optional)",
-        "Guarded Set/Reset operations. Each one needs configuration mode, a selected "
-        "target and its own confirmation; at most one per test run.",
+        "Set/Reset operations sent once to the declared device under test; at most "
+        "one per test run.",
     ),
 )
 
@@ -183,6 +183,14 @@ TEST_CASES: tuple[TestCase, ...] = (
         live=True,
     ),
     TestCase(
+        "protocol.address_conflicts",
+        "Duplicate NameOfStation/IP detection",
+        "Live DCP",
+        "Compare the discovered devices for a NameOfStation or IPv4 parameter that is "
+        "advertised by more than one MAC. Read-only; transmits one ordinary Identify.",
+        live=True,
+    ),
+    TestCase(
         "protocol.get_live",
         "Live read-only Get",
         "Live DCP",
@@ -233,9 +241,9 @@ TEST_CASES: tuple[TestCase, ...] = (
     ),
     TestCase(
         "write.set_name",
-        "Set NameOfStation (optional, guarded)",
+        "Set NameOfStation (optional)",
         "State-changing (optional)",
-        "Requires configuration mode, per-operation confirmation and a selected target. "
+        "Requires a declared device under test and per-operation authorization. "
         "Sends one Set and one read-back Get; no retry.",
         live=True,
         default_enabled=False,
@@ -243,9 +251,9 @@ TEST_CASES: tuple[TestCase, ...] = (
     ),
     TestCase(
         "write.set_ip",
-        "Set IP parameters (optional, guarded)",
+        "Set IP parameters (optional)",
         "State-changing (optional)",
-        "Requires configuration mode, per-operation confirmation and a selected target. "
+        "Requires a declared device under test and per-operation authorization. "
         "Sends one Set and one read-back Get; no retry.",
         live=True,
         default_enabled=False,
@@ -253,9 +261,9 @@ TEST_CASES: tuple[TestCase, ...] = (
     ),
     TestCase(
         "write.reset",
-        "ResetToFactorySettings (optional, guarded)",
+        "ResetToFactorySettings (optional)",
         "State-changing (optional)",
-        "Requires configuration mode, per-operation confirmation and a selected target. "
+        "Requires a declared device under test and per-operation authorization. "
         "Acknowledged resets are followed by one read-only post-check.",
         live=True,
         default_enabled=False,
@@ -333,6 +341,7 @@ _DEVICE_READ_ONLY_IDS: tuple[str, ...] = (
     "env.capture",
     "protocol.identify_discovery",
     "protocol.identity_completeness",
+    "protocol.address_conflicts",
     "protocol.get_live",
     "protocol.unicast_identify",
     "protocol.identity_before_after",
@@ -362,8 +371,8 @@ DEVICE_VALIDATION_SUITE = TestSuite(
     description=(
         "Complete validation of one DCP-capable device: the read-only Identify/Get "
         "checks followed by one Set NameOfStation, one Set IP and one "
-        "ResetToFactorySettings. Needs configuration mode and a declared device "
-        "under test; the name/IP values come from the Configuration tab and the "
+        "ResetToFactorySettings. Needs a declared device under test; the name/IP "
+        "values come from the Configuration tab and the "
         "reset mode from the Reset tab. Each state-changing frame is sent once, "
         "revalidated and read back; no retry, no rollback."
     ),
@@ -376,8 +385,8 @@ FULL_VALIDATION_SUITE = TestSuite(
     title="Full validation suite",
     description=(
         "The tool self-test followed by the device validation suite (read-only "
-        "checks plus the three state-changing tests). Needs configuration mode and "
-        "a declared device under test."
+        "checks plus the three state-changing tests). Needs a declared device under "
+        "test."
     ),
     test_ids=TOOL_SELF_TEST_SUITE.test_ids + DEVICE_VALIDATION_SUITE.test_ids,
 )

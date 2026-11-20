@@ -19,14 +19,14 @@ troubleshooting, and a headless CLI — never implementing an unverified
 destructive operation.
 
 Acceptance = phases 1–4 implemented; every state-changing path gated
-(configuration mode, per-operation confirmation, fresh target revalidation, no
+(per-operation confirmation, fresh target revalidation, no
 retry/batch/broadcast); unverified operations refused rather than guessed;
 tests and docs present and consistent.
 
 ## Current status
 
-Complete. The suite passes (181 tests), the lint gate is clean, the packaging
-artifacts were rebuilt, and the read-only plus guarded paths were validated on
+Complete. The suite passes, the lint gate is clean, the packaging
+artifacts were rebuilt, and the read-only plus write paths were validated on
 an isolated lab segment. No deferred work remains.
 
 ## Implemented changes
@@ -42,9 +42,9 @@ config change was made.
   `utils.py`, `services/signal.py`, `testrunner/cases.py`, `gui/app.py`,
   `gui/workers.py`, `gui/confirmation.py`, `gui/presentation.py`, `gui/tabs/`),
   threading, safety table, phase table and limitations.
-- `AGENTS.md` — refreshed verified facts: 181 tests / ~70 s, `cli.py` as a
+- `AGENTS.md` — refreshed verified facts: 277 tests / ~126 s, `cli.py` as a
   consumer of `operations.py`, Signal exposed by the Device Details tab and
-  `dcp-cli signal`, `dist/` rebuilt 2026-11-14.
+  `dcp-cli signal`, `dist/` rebuilt 2026-11-19 (0.1.1).
 - `README.md` — removed historical wording, refreshed the project layout and
   test-coverage list, corrected the “this phase” wording.
 - `HANDOFF.md` — replaced the historical session log with this handover.
@@ -54,15 +54,23 @@ Current capability summary (verified in the tree):
 - Discovery: Identify-All, exact-NameOfStation-filtered Identify (`02/02`),
   unicast Identify, dedupe by `(interface, MAC)`, late/unrelated/duplicate
   handling, VLAN tagging and ResponseDelayFactor timeout extension.
+- Monitor: repeated read-only Identify at a configured interval (minimum 1 s)
+  with added/removed/changed-device detection for NameOfStation, IP parameters,
+  role, IDs, alias, instance and advertised options; Monitor tab and
+  `dcp-cli monitor`.
 - Read-only Get with presets and explicit DCP block-error decoding.
 - Unguarded DCP Signal (`05/03`, SignalValue `0x0100`): one unicast frame,
   rate-limited, never retried, never routed through `WriteService`.
-- Guarded Set NameOfStation, Set IP, RTFS modes 1/2/4/8 and legacy FactoryReset
-  (`05/05`): configuration mode, per-operation confirmation, fresh unicast
-  revalidation, one frame, read-back Get (Set) or read-only post-check (reset).
-- 20-case functional test catalogue (`env.*`, `parser.*`, `protocol.*`,
+- Set NameOfStation, Set IP, RTFS modes 1/2/4/8 and legacy FactoryReset
+  (`05/05`): per-operation confirmation, fresh read-only revalidation (unicast,
+  with one NameOfStation-filtered multicast fallback for devices that ignore
+  unicast), one frame, read-back Get (Set) or a bounded polling post-check
+  (reset).
+- Duplicate NameOfStation/IP detection in discovery warnings and in the
+  `protocol.address_conflicts` read-only test.
+- 22-case functional test catalogue (`env.*`, `parser.*`, `protocol.*`,
   `validation.*`, `write.*`); at most one state-changing test per run.
-- Seven-tab GUI and headless `dcp-cli` (`python -m dcpstudio COMMAND`) over the
+- Eight-tab GUI and headless `dcp-cli` (`python -m dcpstudio COMMAND`) over the
   same services, operations catalogue and safety gate; CLI exit codes 0/1/2 with
   `--json` and `--report` output.
 - Passive capture, transaction log, hex inspection, PCAP export and offline
@@ -75,9 +83,9 @@ Current capability summary (verified in the tree):
 - The request was documentation-only: `PROMPT.md` and `PLAN.md` had to describe
   the implemented build, and obsolete text had to be removed from `AGENTS.md`,
   `HANDOFF.md`, `PLAN.md` and `README.md`.
-- Facts were re-verified against the tree before writing: 181 tests pass, the
+- Facts were re-verified against the tree before writing: 277 tests pass, the
   ruff gate is clean, PySide6 resolves to 6.12.0 and `dist/` was rebuilt on
-  2026-11-14.
+  2026-11-19 (version 0.1.1).
 - Historical narrative (resolved review items, old coverage/refactor numbers,
   superseded phase labels) was removed rather than preserved as contradictory
   task state.
@@ -99,9 +107,9 @@ Constraints a future agent must preserve:
 
 | Check | Command / procedure | Result |
 |---|---|---|
-| Full suite | `QT_QPA_PLATFORM=offscreen uv run pytest` | **PASS** — 181 passed in 70.04 s |
+| Full suite | `QT_QPA_PLATFORM=offscreen uv run pytest` | **PASS** — 277 passed in 126.51 s |
 | Lint gate | `uv run ruff check src tests tools` | **PASS** — all checks passed |
-| Package artifact inspection | `.venv/bin/python -m zipfile -l dist/dcp_studio-0.1.0-py3-none-any.whl` | **PASS** — contains `dcpstudio/cli.py`, `gui/app.py`, `services/signal.py`, `entry_points.txt`. `uv build` itself was not re-run in this documentation-only pass. |
+| Package artifact inspection | `.venv/bin/python -m zipfile -l dist/dcp_studio-0.1.1-py3-none-any.whl` | **PASS** — contains `dcpstudio/cli.py`, `gui/app.py`, `services/signal.py`, `entry_points.txt`. `uv build` was re-run on 2026-11-19 for version 0.1.1. |
 | Sensitive-data review | manual read of all changed documents | **PASS** — lab vendor/model/MAC/IP/station identifiers remain withheld; only the synthetic examples `02:00:00:00:00:11` and `192.168.20.x` appear. |
 
 Not verified in this pass: Windows/Npcap, other vendors' devices, power-cycle
@@ -117,7 +125,7 @@ host, so the capability-carrying interpreter is the way to run live).
 **No vendor, model, MAC address, IP address or station name from that lab is
 recorded here** — and none may be added. See `AGENTS.md` for that rule.
 
-Phase 1 — read-only (configuration mode OFF, `write.*` tests not selected):
+Phase 1 — read-only (no `write.*` tests selected):
 
 | Step | Result |
 |---|---|
@@ -136,7 +144,7 @@ interface — confirming the names recorded in `constants.py` and
 Phase 2 — state-changing (operator authorized, "all is safe"):
 
 Executed through the shipped `TestRunner` / `WriteService` paths with
-configuration mode ON, per-operation authorization, fresh unicast revalidation,
+per-operation authorization, fresh unicast revalidation,
 single send and no retry. Writes targeted **only the IO-Device**; the PC-class
 station received read-only frames only.
 
@@ -164,7 +172,7 @@ default address, i.e. nothing from the tests remains configured.
 **Not exercised even here:** reset modes 3/9 (refused by the encoder),
 power-cycle persistence of *permanent* values (no power control), and any other
 vendor's device. DCP Signal (`05/03`) *was* exercised: acknowledged with
-`blockError 0x00` and no configuration mode enabled (`RTT` ≈ 32 ms); the LED
+`blockError 0x00` and no confirmation dialog (`RTT` ≈ 32 ms); the LED
 effect itself is not observable over DCP.
 
 ## Known issues and review findings

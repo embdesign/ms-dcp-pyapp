@@ -14,6 +14,7 @@ from .configuration import ConfigurationTabMixin
 from .device import DeviceTabMixin
 from .discovery import DiscoveryTabMixin
 from .logs import LogsTabMixin
+from .monitor import MonitorTabMixin
 from .reset import ResetTabMixin
 from .test_runner import TestRunnerTabMixin
 from .write_flow import WriteFlowMixin
@@ -23,6 +24,7 @@ __all__ = ["TabBuildersMixin"]
 
 class TabBuildersMixin(
     DiscoveryTabMixin,
+    MonitorTabMixin,
     DeviceTabMixin,
     ConfigurationTabMixin,
     ResetTabMixin,

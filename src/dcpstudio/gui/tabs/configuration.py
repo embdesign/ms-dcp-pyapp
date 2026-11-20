@@ -26,15 +26,15 @@ class ConfigurationTabMixin:
         layout.setSpacing(6)
         layout.addWidget(
             banner(
-                "<b>Guarded configuration.</b> No Set frame is sent until configuration "
-                "mode is enabled, the operation is confirmed, and the target "
-                "is revalidated with a fresh unicast Identify. Name/IP changes can interrupt "
-                "communication and may require a controller reconnect. Use an isolated lab.",
+                "<b>Confirmed configuration.</b> Every Set frame is preceded by a "
+                "confirmation dialog and a fresh unicast Identify revalidation. Name/IP "
+                "changes can interrupt communication and may require a controller "
+                "reconnect. Use an isolated lab.",
                 "Warning",
             )
         )
 
-        target_group = QGroupBox("Selected target and configuration mode")
+        target_group = QGroupBox("Selected target")
         target_layout = QGridLayout(target_group)
         self.config_target_label = QLabel(
             "No device selected. Discover and select exactly one target first."
@@ -42,14 +42,6 @@ class ConfigurationTabMixin:
         self.config_target_label.setWordWrap(True)
         self.config_target_label.setTextFormat(Qt.TextFormat.RichText)
         target_layout.addWidget(self.config_target_label, 0, 0, 1, 2)
-        self.config_mode_label = QLabel("Configuration mode: <b>OFF</b>")
-        self.config_mode_label.setTextFormat(Qt.TextFormat.RichText)
-        self.config_mode_button = QPushButton("Enable configuration mode")
-        self.config_mode_button.clicked.connect(self._toggle_configuration_mode)
-        target_layout.addWidget(self.config_mode_label, 1, 0)
-        target_layout.addWidget(
-            self.config_mode_button, 1, 1, Qt.AlignmentFlag.AlignRight
-        )
         layout.addWidget(target_group)
 
         name_group = QGroupBox("NameOfStation")

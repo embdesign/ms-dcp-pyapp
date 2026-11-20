@@ -21,6 +21,7 @@ from ..model import (
     DeviceIdentity,
     DiscoveryResult,
     TransactionRecord,
+    find_address_conflicts,
     iso_utc,
     utc_now,
 )
@@ -390,6 +391,12 @@ class DiscoveryService:
                 )
             )
         max_spread_ms = max(0, (int(cfg.response_delay_factor) - 1) * 10)
+        for conflict in find_address_conflicts(in_window):
+            warnings.append(
+                f"Observed {conflict.detail}. Two devices that advertise the same "
+                "address cannot be told apart by discovery and cannot be addressed "
+                "unambiguously by name or IP."
+            )
         if cfg.timeout_s * 1000 < max_spread_ms:
             warnings.append(
                 f"Timeout ({cfg.timeout_s * 1000:.0f} ms) is shorter than the maximum "

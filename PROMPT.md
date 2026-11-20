@@ -75,7 +75,7 @@ Where an operation requires a multi-block transaction or control sequence, imple
 
 Default to passive capture and user-triggered discovery/read operations.
 
-Require an explicit configuration mode before any state-changing operation.
+Require one explicit confirmation before any state-changing operation.
 
 Before setting parameters or resetting a device:
 - Show the selected interface and target MAC address.
@@ -137,7 +137,7 @@ Provide a test runner for:
 - Response-time measurements.
 - Before/after comparison of device identity and network parameters.
 
-Make configuration and reset tests optional, explicitly enabled, and guarded by the same confirmation controls.
+Make configuration and reset tests optional, explicitly enabled, and protected by the same confirmation controls.
 
 Use mocked transport or offline packet fixtures for malformed-packet and parser robustness tests. Do not send fuzzing traffic to live equipment.
 
@@ -203,7 +203,7 @@ Deliver:
 Implement in phases:
 1. Interface selection, passive decoding, Identify discovery, and reporting.
 2. Get operations and read-only functional tests.
-3. Guarded station-name and IP configuration.
+3. Confirmation-protected station-name and IP configuration.
 4. Verified reset variants with mandatory confirmation and post-action checks.
 
 First present the architecture, dependencies, protocol references, and support matrix. Then implement phase 1 completely.
@@ -212,7 +212,7 @@ Do not implement a destructive operation until its wire encoding and semantics a
 
 10. Implemented in the delivered build (beyond this brief)
 
-The delivered `dcpstudio` 0.1.0 build also includes the following capabilities.
+The delivered `dcpstudio` 0.1.1 build also includes the following capabilities.
 They are verified against the references in `docs/references.md`, recorded in
 `docs/protocol-support-matrix.md`, and none of them weakens the safety model
 above.
@@ -220,13 +220,13 @@ above.
 Operator surfaces:
 - Headless CLI `dcp-cli` (also `python -m dcpstudio COMMAND`) over the same
   services, codec, operations catalogue and safety gate as the GUI:
-  `interfaces`, `discover`, `get`, `signal`, `set-name`, `set-ip`, `reset`,
-  `tests`, `pcap`. Guarded commands require all of
-  `--enable-configuration --confirm --safe-maintenance`; `--json` keeps stdout
+  `interfaces`, `discover`, `monitor`, `get`, `signal`, `set-name`, `set-ip`,
+  `reset`, `tests`, `pcap`. State-changing commands require `--confirm` and
+  `tests --include-writes --confirm --mac` runs the write cases; `--json` keeps stdout
   machine-readable; `--report PATH` writes JSON or HTML; exit codes are 0 for
   success, 1 for error/refusal, and 2 for inconclusive/outcome unknown.
-- Seven-tab desktop GUI: Interfaces & Discovery, Device Details, Configuration,
-  Reset, Test Runner, Packet Capture, and Logs & Reports.
+- Eight-tab desktop GUI: Interfaces & Discovery, Monitor, Device Details,
+  Configuration, Reset, Test Runner, Packet Capture, and Logs & Reports.
 - A `demo0` mock interface with three simulated devices, usable without
   hardware or raw-packet privileges; the mock simulates Set/Reset in memory.
 - Persisted non-sensitive UI preferences (last interface, timeout,
@@ -236,13 +236,17 @@ Operator surfaces:
 Additional DCP capabilities:
 - Identify filtered by exact NameOfStation (one `02/02` block, case-sensitive)
   and unicast Identify to a selected MAC.
+- Repeated Identify monitoring at a user-chosen interval (minimum 1 s, still
+  rate-limited) with added/removed/changed-device detection for NameOfStation,
+  IP parameters, role, IDs, alias, instance and advertised options. Read-only;
+  one ordinary Identify per cycle and no background scanning.
 - 802.1Q VLAN tagging for requests and capture, with stacked tags reported.
 - ResponseDelayFactor-based timeout extension for slow device stacks.
 - Read-only Get presets for identity, IP, name, Device ID, role, options, alias,
   instance, OEM ID and device-initiative blocks, plus explicit DCP block-error
   decoding.
-- DCP Signal (`05/03`, SignalValue `0x0100`) as an unguarded identification
-  action: one unicast frame, rate-limited, never retried, no configuration mode.
+- DCP Signal (`05/03`, SignalValue `0x0100`) as a plain identification
+  action: one unicast frame, rate-limited, never retried, no confirmation.
 - Legacy FactoryReset (`05/05`, BlockQualifier `0x0000`, full reset, no mode
   field) behind the same guarded path as ResetToFactorySettings modes 1/2/4/8.
   Modes 3 and 9 remain refused because their semantics are unverified.
@@ -256,7 +260,7 @@ Diagnostics, capture and reporting:
   and known limitations.
 - Request rate limiter shared by all reads and writes; late, duplicate,
   unrelated and truncated responses handled explicitly.
-- 21-case functional test catalogue with a functional ID namespace
+- 22-case functional test catalogue with a functional ID namespace
   (`env.*`, `parser.*`, `protocol.*`, `validation.*`, `write.*`); read-only by
   default, with state-changing tests only in the declared-device suites.
 

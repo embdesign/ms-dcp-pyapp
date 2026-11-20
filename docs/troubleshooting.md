@@ -246,7 +246,7 @@ a Get issued immediately after discovery may wait briefly.
 - Duplicate Get responses for the same Xid are counted and ignored; the first
 matching response wins.
 - Get never changes device configuration. Set and reset operations are reachable
-only through the guarded Configuration and Reset workflows (see §9).
+only through the Configuration and Reset tabs (see §9).
 
 ---
 
@@ -254,16 +254,17 @@ only through the guarded Configuration and Reset workflows (see §9).
 
 | Symptom | Meaning / action |
 |---|---|
-| Apply buttons stay disabled | Configuration mode is OFF, no target is selected, or another operation is running. Enable configuration mode explicitly and select exactly one discovered device. |
-| `Blocked by safety or validation checks` | An unchecked authorization or safe-maintenance box, configuration mode off, an interface/target mismatch, or parameter validation failed. No frame was sent. |
-| `Target could not be revalidated; no frame sent` | The fresh unicast Identify did not return the selected identity. Re-run discovery; the device may have changed or disappeared. Some devices answer multicast but not unicast Identify; this build refuses to configure them. |
+| Apply buttons stay disabled | No target is selected, or another operation is running. Select exactly one discovered device and wait for the current operation to finish. |
+| `Blocked by safety or validation checks` | An unchecked authorization or safe-maintenance box, an interface/target mismatch, or parameter validation failed. No frame was sent. |
+| `Target could not be revalidated; no frame sent` | Neither a fresh unicast Identify nor the one NameOfStation-filtered multicast fallback returned the selected identity. Re-run discovery; the device may have changed or disappeared. If the station name was never read by discovery there is no name filter to use, so the fallback cannot run. |
 | `Device rejected the operation` | Inspect the Control/Response block error. `0x05` means local reasons, `0x06` means in operation, `0x07` means security restriction. No retry is attempted. |
 | `No matching response (outcome unknown)` | The Set/Reset may or may not have been applied. Do not assume failure and do not blindly retry; re-discover and inspect current state. |
 | `Cancelled after transmission (outcome unknown)` | **Cancel** was pressed after the Set/Reset left the NIC. Cancellation does not undo the frame. Re-discover and inspect current state; do not blindly retry. |
 | Read-back `mismatch` | The device acknowledged the Set but the subsequent Get returned different values. Stop and investigate; do not loop the Set. |
 | Read-back `unknown` | The read-back Get timed out or was incomplete. The acknowledgement is not proof of persistence. |
-| Reset acknowledged, then no post-check response | The device may still be rebooting. This is outcome unknown. Use **Verify target after reset** later; do not resend the reset automatically. |
+| Reset acknowledged, then no post-check response | The bounded post-check window expired without an Identify response. The device may still be rebooting. This is outcome unknown. Use **Verify target after reset** later; do not resend the reset automatically. |
 | Reset post-check responded | The device is reachable at the same MAC. This does not prove which data was erased or that the requested reset scope was implemented. |
+| Discovery warns about a duplicate NameOfStation/IP | Two devices advertise the same address, so they cannot be told apart or addressed unambiguously. Fix the assignment (one device at a time) before using Set/Reset by name or IP. |
 | Reset mode 3/9 unavailable | They are listed by Wireshark but were not verified on hardware, so the encoder refuses them. |
 | Signal acknowledged, no LED visible | A DCP acknowledgement proves only that the device accepted `05/03`. LED duration and colour are vendor-specific and cannot be observed over DCP. |
 | Signal `no response` / timeout | Treated as **outcome unknown**, not as "device does not support Signal". Check the interface, VLAN and privileges before repeating. |

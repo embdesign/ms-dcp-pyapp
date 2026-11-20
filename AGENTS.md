@@ -17,7 +17,7 @@ Read this before changing code. It records only facts verified in this tree.
 
 ```bash
 uv sync                                     # create .venv + dev group
-uv run pytest                               # full suite (offscreen Qt, 254 tests)
+uv run pytest                               # full suite (offscreen Qt, 277 tests)
 uv run pytest --cov=dcpstudio --cov-report=term-missing
 uv run ruff check src tests tools           # configured lint gate (clean)
 uv run mypy                                 # typed gate for the pure modules (clean)
@@ -53,7 +53,7 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   back into the transport package.
 - **One composition root.** `session.build_services()` / `open_session()` /
   `probe_readiness()` in `session.py` are the only places that construct a
-  transport or the discovery/Get/Write/Signal services. The GUI, `cli.py` and
+  transport or the discovery/Get/Write/Signal/monitor services. The GUI, `cli.py` and
   `testrunner/runner.py` must not rebuild that wiring. `tests/test_layer_boundaries.py`
   enforces this and the rest of the layering; add new exceptions to its
   documented allowlist, never by loosening a rule.
@@ -75,10 +75,12 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   `docs/references.md` first.
 - Safety model is layered and must stay intact:
   `safety.py` (`SafetyGate`, `ConfirmationRequest`) → `services/write.py`
-  (validation, confirmation, fresh unicast-Identify revalidation, single send,
+  (validation, confirmation, fresh read-only Identify revalidation — unicast,
+  with one NameOfStation-filtered multicast fallback when the device ignores
+  unicast — single send,
   read-back / post-check). No automatic retry, no rollback, no batch or
   broadcast path, unicast targets only.
-- Guarded-operation text and parameters live **once** in `operations.py`
+- Operation text and parameters live **once** in `operations.py`
   (`set_name_spec`, `set_ip_spec`, `reset_mode_spec`, `legacy_reset_spec`,
   `confirmation_for`). The GUI (`_apply_*`, `_run_tests`), `cli.py` and
   `testrunner/runner.py` must all consume it — never copy the consequences or
@@ -93,21 +95,31 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   not a modal dialog per operation: `_run_tests` passes the same
   `WriteAuthorization` to every selected write test, uses only the declared DUT
   (or the selected device row) as the target, and logs `safety.dut_declared`
-  with the parameters. Everything else stays gated: configuration mode is
-  required, targets are one unicast device, each frame is single-shot with a
-  fresh revalidation inside `WriteService` and a read-back, there is no retry or
-  rollback, and a cancelled in-flight write is `outcome_unknown`.
+  with the parameters. Targets are one unicast device, each frame is single-shot
+  with a fresh revalidation inside `WriteService` and a read-back, there is no
+  retry or rollback, and a cancelled in-flight write is `outcome_unknown`.
+  There is **no session-wide configuration mode**; the DUT declaration is the
+  authorization for a test run, and a single/dedicated operation is authorized
+  by its own confirmation dialog or `--confirm`.
   `DEVICE_READ_ONLY_SUITE` and `TOOL_SELF_TEST_SUITE` must never contain a
-  `write.*` test, and `dcp-cli tests` still refuses them.
+  `write.*` test; `dcp-cli tests` runs them only with
+  `--include-writes --confirm --mac`.
 - Reset modes 3 and 9 stay refused by the encoder (unverified semantics).
   Legacy FactoryReset (`05/05`) **is** implemented: BlockQualifier `0x0000`,
   full reset, no mode field, through the same gate.
-- DCP Signal (`05/03`) is **implemented and deliberately unguarded**: it lives
+- DCP Signal (`05/03`) is **implemented and deliberately unconfirmed**: it lives
   in `services/signal.py`, is exposed by the Device Details tab and
-  `dcp-cli signal`, and needs no configuration mode and no authorization
+  `dcp-cli signal`, and needs no confirmation
   dialog, because it stores nothing and interrupts nothing. It is still one
   unicast frame, rate-limited, never retried, and never routed through
   `WriteService` (which rejects `kind="signal"` on purpose).
+- Monitoring is **user-started polling, not a background scanner**. The loop
+  lives in `services/monitor.py` over the existing `DiscoveryService` (one
+  ordinary Identify per cycle) and the diff/vocabulary in the pure `monitor.py`;
+  it is exposed by the Monitor tab and `dcp-cli monitor`. It constructs no
+  transport, writes nothing, and is part of the composition root. Keep it
+  read-only, keep the interval ≥ 1 s (the shared limiter still applies), and
+  keep it out of the sense of "automatic retry": a cycle is one request.
 - Outcome vocabulary is part of the contract: a timeout is `outcome_unknown`,
   never "failed" or "absent"; an acknowledgement is never proof of persistence
   or of reset completion.
@@ -166,7 +178,8 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   not move it into `tests/` without replacing that dependency first.
 - `gui/controller.py` (`SessionController`) owns session state (interface,
   transport, services, safety gate, device cache, result histories) and the
-  operations `discover` / `read_get` / `signal` / `execute_write` / `post_check`.
+  operations `discover` / `monitor` / `read_get` / `signal` / `execute_write` /
+  `post_check`.
   The service workers in `gui/workers.py` are thin adapters over it.
   `gui/main_window.py` is the window shell (~380 lines: widgets, menu, status
   bar, tabs, session-state properties, the per-worker `*_running` predicates,
@@ -174,9 +187,9 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   properties over the controller (no `__getattr__` hooks) so the tab mixins keep
   working. Do not add new state to the window — extend the controller. Tab
   construction **and** its slot handlers live in `gui/tabs/<tab>.py` mixins
-  (discovery incl. interface lifecycle, capture incl. capture lifecycle,
+  (discovery incl. interface lifecycle, monitor, capture incl. capture lifecycle,
   configuration, reset, device, test runner, logs) plus
-  `gui/tabs/write_flow.py` (`WriteFlowMixin`) for the guarded Set/Reset flow,
+  `gui/tabs/write_flow.py` (`WriteFlowMixin`) for the Set/Reset flow,
   the confirmation hand-off and the reset post-check; put new tab
   widgets/handlers there, not in the shell.
   `tests/test_gui_orchestration.py` and `tests/test_gui_controller.py` target

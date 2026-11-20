@@ -264,7 +264,6 @@ class LogsTabMixin:
         self.latest_write_result = None
         self.latest_reset_result = None
         self.write_runs.clear()
-        self.safety_gate.disable_configuration_mode()
         self.transactions.clear()
         self.latest_tests = []
         self.event_log.clear()

@@ -35,6 +35,7 @@ PURE_MODULES = frozenset(
         "dcpstudio.html_render",
         "dcpstudio.outcomes",
         "dcpstudio.interfaces",
+        "dcpstudio.monitor",
     }
 )
 

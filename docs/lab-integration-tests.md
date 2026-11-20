@@ -4,7 +4,7 @@ These tests are for a **spare device on an isolated Layer-2 segment**. Do not ru
 them on a production line or on equipment that is not cleared for interruption.
 The read-only procedure transmits Identify/Get frames only. The optional
 state-changing procedure can change name/IP and reset the device; it requires
-configuration mode and an explicit confirmation — per operation in the
+an explicit confirmation — per operation in the
 Configuration/Reset tabs, or once per run for the device under test declared in
 the Test Runner's device validation suite.
 Start with the read-only tests and have a recovery plan before any write test.
@@ -24,7 +24,7 @@ Start with the read-only tests and have a recovery plan before any write test.
 | Backup | Record the device's current name/IP outside the tool before testing |
 
 The read-only procedure makes **no configuration or reset changes**. The
-state-changing procedure is guarded and optional. Do not improvise a write test
+state-changing procedure is optional. Do not improvise a write test
 outside this procedure; record the device's current name/IP and recovery method
 first.
 
@@ -129,7 +129,7 @@ first.
 2. Export JSON and HTML.
 3. **Pass:** both contain UTC timestamps, interface, target identity,
    operations, Xids, response timing, statuses, before/after observations,
-   guarded write outcomes/verification, limitations, and the sensitive-data
+   write outcomes/verification, limitations, and the sensitive-data
    warning.
 4. Confirm no credentials or keys are present.
 
@@ -161,16 +161,18 @@ first.
 5. A missing Get response is **outcome unknown**, not proof that the block is
    unsupported.
 
-### L-14 Guarded Set NameOfStation
+### L-14 Set NameOfStation
 
 1. Record the current name/IP and confirm the device is not in a production
-   connection. Enable **Configuration mode** in the Configuration tab.
+   connection.
 2. Select exactly one target, choose **Temporary** first, enter a valid unique
    name, and press **Set NameOfStation**.
 3. Read the confirmation dialog: verify interface, target MAC, identity, new
    name, qualifier `0x0000`, and consequences. Check both authorization boxes
    and execute.
-4. **Pass:** one unicast Identify revalidation, one Set request (`FEFD`, ServiceID
+4. **Pass:** one read-only revalidation (unicast, or one NameOfStation-filtered
+   multicast Identify when the device ignores unicast; the MAC must match), one
+   Set request (`FEFD`, ServiceID
    Set `4`), one Control/Response with block error `0x00`, one read-back Get, and
    `verification=verified`. The device must still be reachable.
 5. Repeat with **Permanent** (`0x0001`) and, if safe, power-cycle the device.
@@ -179,7 +181,7 @@ first.
    (no Set frame), and trigger a device rejection if available (record the DCP
    block error; do not retry).
 
-### L-15 Guarded Set IP parameters
+### L-15 Set IP parameters
 
 1. Confirm the address is unused by other means; DCP discovery does not prove
    this. Record the recovery path (console, vendor tool, or known-good address).
@@ -193,13 +195,14 @@ first.
 5. Repeat **Permanent** only if the device is safe to power-cycle and the
    persistence behavior is documented.
 
-### L-16 Guarded ResetToFactorySettings
+### L-16 ResetToFactorySettings
 
 1. Use only a spare device. Back up name/IP/configuration outside the tool.
-2. Select reset **mode 2** (communication parameters) first and enable
-   configuration mode. Confirm with both checkboxes in the dialog.
+2. Select reset **mode 2** (communication parameters) first. Confirm with both
+   checkboxes in the dialog.
 3. **Pass:** one Set/Reset request with qualifier `0x0004`, Control/Response
-   block error `0x00`, and one read-only post-check. The device may reboot and
+   block error `0x00`, and one read-only post-check polled inside its bounded
+   window. The device may reboot and
    stop responding; no automatic retry is performed.
 4. Use **Verify target after reset** when the device is reachable. A response
    proves reachability only; independently inspect the expected name/IP scope.

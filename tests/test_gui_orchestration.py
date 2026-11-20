@@ -116,28 +116,21 @@ def test_confirmation_is_bound_to_interface_and_selected_identity():
         app.processEvents()
 
 
-def test_config_controls_follow_configuration_mode_not_signal():
+def test_config_controls_follow_selected_target():
     app = _app()
     window, app = _window_with_discovery()
     try:
         window._update_config_controls()
-        assert window.safety_gate.configuration_mode is False
-        assert window.apply_name_button.isEnabled() is False
-        assert window.apply_ip_button.isEnabled() is False
-        assert window.apply_reset_button.isEnabled() is False
-        # Signal is deliberately unguarded but still needs a target.
-        assert window.signal_button.isEnabled() is True
-
-        window.safety_gate.enable_configuration_mode(explicit_authorization=True)
-        window._update_config_controls()
         assert window.apply_name_button.isEnabled() is True
         assert window.apply_ip_button.isEnabled() is True
         assert window.apply_reset_button.isEnabled() is True
-        assert "Disable configuration mode" == window.config_mode_button.text()
+        # Signal needs a target too, but is not itself a state change.
+        assert window.signal_button.isEnabled() is True
 
-        window.safety_gate.disable_configuration_mode()
+        window.selected_device = None
         window._update_config_controls()
         assert window.apply_name_button.isEnabled() is False
+        assert window.apply_ip_button.isEnabled() is False
         assert window.apply_reset_button.isEnabled() is False
     finally:
         window.close()

@@ -1,8 +1,8 @@
 """CLI tests against the offline demo transport.
 
-The CLI must reuse the same services and safety gates as the GUI: read-only
-commands never change equipment, guarded commands refuse without all three
-safety flags, and guarded test cases cannot be reached through ``tests``.
+The CLI must reuse the same services and safety gate as the GUI: read-only
+commands never change equipment, a state-changing command refuses without
+``--confirm``, and write test cases need ``--include-writes``.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ FAST = (
     "1",
     "--quiet",
 )
-GUARDS = ("--enable-configuration", "--confirm", "--safe-maintenance")
+GUARDS = ("--confirm",)
 FAST_SIGNAL = ("-i", "demo0", "--timeout", "0.5", "--min-interval", "0.01", "--quiet")
 
 
@@ -59,6 +59,23 @@ def test_discover_demo_lists_three_devices(capsys):
     assert output["outcome"] == "responses_received"
     assert len(output["devices"]) == 3
     assert output["request_count"] == 1
+
+
+def test_monitor_demo_single_cycle_reports_added_devices(capsys):
+    code = cli.main(["monitor", *FAST, "--cycles", "1", "--interval", "1", "--json"])
+    output = _json(capsys)
+    assert code == cli.EXIT_OK
+    assert output["interface"] == "mock:demo0"
+    assert len(output["cycles"]) == 1
+    assert output["cycles"][0]["device_count"] == 3
+    assert len(output["changes"]) == 3
+    assert all(item["kind"] == "added" for item in output["changes"])
+
+
+def test_monitor_rejects_a_sub_second_interval(capsys):
+    code = cli.main(["monitor", *FAST, "--interval", "0.2"])
+    assert code == cli.EXIT_FAILED
+    assert "--interval" in capsys.readouterr().err
 
 
 def test_get_demo_reads_identity(capsys):
@@ -96,7 +113,7 @@ def test_set_name_without_safety_flags_is_refused_before_touching_an_interface(c
     assert code == cli.EXIT_FAILED
     assert "New NameOfStation: line-02.test" in captured.out
     assert "No automatic retry or rollback is performed." in captured.out
-    assert "--enable-configuration" in captured.err
+    assert "--confirm" in captured.err
     assert "Nothing was transmitted" in captured.err
     assert "Unknown interface" not in captured.err
 
@@ -205,12 +222,52 @@ def test_tests_runs_only_read_only_cases(capsys):
     assert output["summary"]["passed"] == 2
 
 
-def test_tests_refuses_guarded_test_ids(capsys):
+def test_tests_refuses_guarded_test_ids_without_include_writes(capsys):
     code = cli.main(["tests", "--select", "write.set_name"])
     captured = capsys.readouterr()
     assert code == cli.EXIT_FAILED
-    assert "read-only checks only" in captured.err
+    assert "--include-writes" in captured.err
     assert "dcp-cli set-name" in captured.err
+
+
+def test_tests_include_writes_requires_confirm(capsys):
+    code = cli.main(
+        [
+            "tests",
+            *FAST,
+            "--include-writes",
+            "--mac",
+            DEVICE_MAC,
+            "--select",
+            "write.set_name",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == cli.EXIT_FAILED
+    assert "--confirm" in captured.err
+
+
+def test_tests_include_writes_runs_a_set_name_against_the_declared_device(capsys):
+    code = cli.main(
+        [
+            "tests",
+            *FAST,
+            "--include-writes",
+            "--confirm",
+            "--mac",
+            DEVICE_MAC,
+            "--name",
+            "line-88.cli",
+            "--select",
+            "write.set_name",
+            "--json",
+        ]
+    )
+    output = _json(capsys)
+    assert code == cli.EXIT_OK
+    assert output["results"][0]["test_id"] == "write.set_name"
+    assert output["results"][0]["status"] == "passed"
+    assert output["results"][0]["evidence"]["write"]["verification"] == "verified"
 
 
 def test_discover_writes_json_report(tmp_path, capsys):

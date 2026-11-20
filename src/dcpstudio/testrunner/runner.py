@@ -1,10 +1,9 @@
-"""Functional test runner: read-only checks plus optional guarded writes.
+"""Functional test runner: read-only checks plus optional state-changing tests.
 
 Read-only tests never change equipment. Optional Name/IP Set and Reset tests
-require configuration mode, a selected target, and a separate per-operation
-confirmation
-supplied before the run. No fuzzing is sent to live equipment, no continuous
-scanning is performed, and every state-changing request is single-shot.
+require a declared target and an authorization supplied before the run. No
+fuzzing is sent to live equipment, no continuous scanning is performed, and
+every state-changing request is single-shot.
 """
 
 from __future__ import annotations

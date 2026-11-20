@@ -71,7 +71,6 @@ def test_controller_ingests_devices_into_its_cache():
 
 def test_controller_executes_a_guarded_write_without_a_window():
     controller = _controller()
-    controller.safety_gate.enable_configuration_mode(explicit_authorization=True)
     try:
         discovered = controller.discover(DiscoveryConfig(timeout_s=0.5))
         device = next(d for d in discovered.devices if d.mac.lower() == TARGET)
@@ -102,9 +101,8 @@ def test_controller_executes_a_guarded_write_without_a_window():
     assert result.verification == "verified"
 
 
-def test_reset_session_forgets_state_and_disarms_the_safety_gate():
+def test_reset_session_forgets_state():
     controller = _controller()
-    controller.safety_gate.enable_configuration_mode(explicit_authorization=True)
     result = controller.discover(DiscoveryConfig(timeout_s=0.5))
     controller.ingest_devices(result.devices)
     controller.selected_device = result.devices[0]
@@ -121,4 +119,3 @@ def test_reset_session_forgets_state_and_disarms_the_safety_gate():
     assert controller.selected_device is None
     assert controller.discovery_runs == []
     assert controller.transactions == []
-    assert controller.safety_gate.configuration_mode is False

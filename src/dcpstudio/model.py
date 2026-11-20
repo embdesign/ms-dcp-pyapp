@@ -342,6 +342,56 @@ class DeviceIdentity:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class AddressConflict:
+    """A NameOfStation or IPv4 address advertised by more than one MAC.
+
+    ``kind`` is ``duplicate_name`` or ``duplicate_ip``; ``value`` is the
+    duplicated address and ``macs`` the sorted MACs that advertise it.
+    """
+
+    kind: str
+    value: str
+    macs: tuple[str, ...]
+
+    @property
+    def detail(self) -> str:
+        label = "NameOfStation" if self.kind == "duplicate_name" else "IPv4 parameter"
+        return f"duplicate {label} {self.value!r} on {', '.join(self.macs)}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": self.kind, "value": self.value, "macs": list(self.macs)}
+
+
+def find_address_conflicts(devices: Iterable[DeviceIdentity]) -> list[AddressConflict]:
+    """Duplicates that make the discovered segment ambiguous.
+
+    Only addresses a device actually advertises are compared: a missing
+    NameOfStation, ``None`` or ``0.0.0.0`` IPv4 parameter is never a duplicate.
+    Names are compared exactly (the same rule as the Identify NameOfStation
+    filter); the result is sorted for stable reports.
+    """
+    names: dict[str, list[str]] = {}
+    addresses: dict[str, list[str]] = {}
+    for device in devices:
+        if device.name_of_station:
+            names.setdefault(device.name_of_station, []).append(device.mac)
+        if device.ip_address and device.ip_address != "0.0.0.0":
+            addresses.setdefault(device.ip_address, []).append(device.mac)
+    conflicts = [
+        AddressConflict("duplicate_name", value, tuple(sorted(macs)))
+        for value, macs in names.items()
+        if len(macs) > 1
+    ]
+    conflicts.extend(
+        AddressConflict("duplicate_ip", value, tuple(sorted(macs)))
+        for value, macs in addresses.items()
+        if len(macs) > 1
+    )
+    conflicts.sort(key=lambda conflict: (conflict.kind, conflict.value))
+    return conflicts
+
+
 @dataclass(slots=True)
 class TransactionRecord:
     timestamp: datetime
@@ -396,6 +446,16 @@ class DiscoveryResult:
     @property
     def duration_ms(self) -> float:
         return max(0.0, (self.finished_at - self.started_at).total_seconds() * 1000.0)
+
+    @property
+    def address_conflicts(self) -> list[AddressConflict]:
+        """Duplicate names/IPs among the devices that answered in the window."""
+        in_window = [
+            device
+            for device in self.devices
+            if not any("after the configured timeout" in w for w in device.warnings)
+        ]
+        return find_address_conflicts(in_window)
 
     @property
     def outcome(self) -> DiscoveryOutcome:

@@ -72,34 +72,6 @@ class WriteFlowMixin:
             verify_after_set=True,
         )
 
-    def _toggle_configuration_mode(self) -> None:
-        if self.safety_gate.configuration_mode:
-            self.safety_gate.disable_configuration_mode()
-            self.event_log.warning(
-                "safety.configuration_mode",
-                "Configuration mode disabled by the operator",
-            )
-        else:
-            answer = QMessageBox.warning(
-                self,
-                "Enable configuration mode",
-                "Configuration mode enables guarded DCP Set/Reset requests.\n\n"
-                "Every operation still requires a per-operation confirmation and a fresh "
-                "target revalidation. Use only on equipment cleared for maintenance.\n\n"
-                "Enable configuration mode?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-            self.safety_gate.enable_configuration_mode(explicit_authorization=True)
-            self.event_log.warning(
-                "safety.configuration_mode",
-                "Configuration mode enabled with explicit operator authorization",
-            )
-        self._update_config_controls()
-        self._update_capture_controls()
-
     def _sync_config_target(self) -> None:
         if not hasattr(self, "config_target_label"):
             return
@@ -143,7 +115,6 @@ class WriteFlowMixin:
     def _update_config_controls(self) -> None:
         if not hasattr(self, "apply_name_button"):
             return
-        config_on = self.safety_gate.configuration_mode
         has_target = (
             self.selected_device is not None
             and self.current_interface is not None
@@ -156,14 +127,15 @@ class WriteFlowMixin:
             or self._get_running()
             or self._write_running()
             or self._post_check_running()
+            or self._monitor_running()
         )
-        writable = config_on and has_target and not busy
+        writable = has_target and not busy
         self.apply_name_button.setEnabled(writable)
         self.apply_ip_button.setEnabled(writable)
         self.apply_reset_button.setEnabled(writable)
         if hasattr(self, "signal_button"):
             # Signal is an identification aid, not a state change: it needs a
-            # target and an idle transport, but not configuration mode.
+            # target and an idle transport only.
             self.signal_button.setEnabled(has_target and not busy)
         for widget in (
             self.name_edit,
@@ -179,25 +151,13 @@ class WriteFlowMixin:
             self.reset_mode_combo,
         ):
             widget.setEnabled(not busy)
-        self.config_mode_button.setText(
-            "Disable configuration mode" if config_on else "Enable configuration mode"
-        )
-        self.config_mode_button.setEnabled(not busy)
-        self.config_mode_label.setText(
-            "Configuration mode: <b style='color:#8c1d12'>ON</b> — each operation still "
-            "requires per-operation confirmation and fresh target revalidation."
-            if config_on
-            else "Configuration mode: <b>OFF</b> — no Set/Reset request can be transmitted."
-        )
         if hasattr(self, "status_safety"):
             self.status_safety.setText(
-                "Writes: ON (per-operation confirmation required)"
-                if config_on
-                else "Writes: OFF"
+                "Writes: ready (per-operation confirmation)"
+                if has_target
+                else "Writes: select one target"
             )
-            self.status_safety.setStyleSheet(
-                "color:#8c1d12;font-weight:700;" if config_on else "color:#334155;"
-            )
+            self.status_safety.setStyleSheet("color:#334155;")
         self.cancel_reset_button.setEnabled(
             self._post_check_running()
             or (
@@ -254,9 +214,6 @@ class WriteFlowMixin:
     def _apply_name(self) -> None:
         if self.selected_device is None or self.current_interface is None:
             return
-        if not self.safety_gate.configuration_mode:
-            QMessageBox.warning(self, "Configuration mode off", "Enable configuration mode first.")
-            return
         name = self.name_edit.text()
         report = validate_station_name(name)
         self._set_validation_label(self.name_validation_label, report)
@@ -281,14 +238,12 @@ class WriteFlowMixin:
                 config=self._current_write_config(),
                 name=name,
                 permanent=permanent,
+                target_name=device.name_of_station,
             )
         )
 
     def _apply_ip(self) -> None:
         if self.selected_device is None or self.current_interface is None:
-            return
-        if not self.safety_gate.configuration_mode:
-            QMessageBox.warning(self, "Configuration mode off", "Enable configuration mode first.")
             return
         ip = self.ip_edit.text().strip()
         mask = self.mask_edit.text().strip()
@@ -318,14 +273,12 @@ class WriteFlowMixin:
                 subnet_mask=mask,
                 gateway=gateway,
                 permanent=permanent,
+                target_name=device.name_of_station,
             )
         )
 
     def _apply_reset(self) -> None:
         if self.selected_device is None or self.current_interface is None:
-            return
-        if not self.safety_gate.configuration_mode:
-            QMessageBox.warning(self, "Configuration mode off", "Enable configuration mode first.")
             return
         choice = self.reset_mode_combo.currentData()
         device = self.selected_device
@@ -341,6 +294,7 @@ class WriteFlowMixin:
                     confirmation=request,
                     authorization=authorization,
                     config=self._current_write_config(),
+                    target_name=device.name_of_station,
                 )
             )
             return
@@ -360,6 +314,7 @@ class WriteFlowMixin:
                 authorization=authorization,
                 config=self._current_write_config(),
                 reset_mode=mode,
+                target_name=device.name_of_station,
             )
         )
 
@@ -374,6 +329,7 @@ class WriteFlowMixin:
             or self._discovery_running()
             or self._get_running()
             or self._tests_running()
+            or self._monitor_running()
         ):
             QMessageBox.information(
                 self, "Another operation is running", "Wait for the current operation to finish."
@@ -535,6 +491,7 @@ class WriteFlowMixin:
             or self._discovery_running()
             or self._get_running()
             or self._tests_running()
+            or self._monitor_running()
         ):
             return
         if self.transport is not None and not self.transport.is_capturing:

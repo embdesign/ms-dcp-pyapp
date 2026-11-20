@@ -94,8 +94,8 @@ Option (1) | SubOption (1) | BlockLength (2) | BlockInfo/Qualifier (2) | Value (
 
 p-net implements this as `temp = ((qualifier & 1) == 0)`. Temporary vs.
 permanent affects non-volatile storage and may affect behavior after power
-cycle. The application sends these values only behind configuration mode,
-an explicit confirmation and fresh target revalidation.
+cycle. The application sends these values only after an explicit confirmation
+and fresh target revalidation.
 
 ### 3.4 BlockQualifier for ResetToFactorySettings (`05/06`)
 
@@ -125,7 +125,7 @@ full reset (it sets reset mode 99, "reset all", PROFINET 2.4 CMINA state table
 cases 15/30). This application always sends `0x0000` and never lets the operator
 select a scope; the erased data stays vendor-dependent.
 
-### 3.5 Control/Signal (`05/03`) — implemented, unguarded
+### 3.5 Control/Signal (`05/03`) — implemented, unconfirmed
 
 Option `05`, sub-option `03`, `BlockLength` 4: a 2-byte BlockQualifier followed
 by a 2-byte SignalValue. Wireshark decodes exactly one value, `0x0100` =
@@ -134,7 +134,7 @@ by a 2-byte SignalValue. Wireshark decodes exactly one value, `0x0100` =
 `0x0000` and SignalValue `0x0100`; any other value is refused by the encoder.
 
 Signal changes no stored configuration and interrupts nothing, so it is **not**
-a guarded operation: no configuration mode, no authorization dialog. It is still
+a state-changing operation: no confirmation dialog. It is still
 one unicast frame, rate-limited, never retried. A DCP acknowledgement confirms
 that the device accepted the request — it cannot prove the LED was visible.
 

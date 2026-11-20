@@ -1,7 +1,8 @@
 # Protocol support matrix
 
 Status of every DCP capability in this repository. **All listed capabilities
-are implemented as stated; state-changing operations are guarded.** "Verified"
+are implemented as stated; state-changing operations require one confirmation
+per operation.** "Verified"
 means the wire layout is corroborated by p-net and/or Wireshark, not that every
 device implements it.
 
@@ -23,7 +24,8 @@ Legend:
 | VLAN tag (802.1Q) | ✅ | ✅ | ✅ | ✅ | One tag; stacked tags warned |
 | Identify-All | ✅ | ✅ | ✅ | ✅ | One request per user action; timeout + ResponseDelayFactor |
 | Unicast Identify | ✅ | ✅ | ✅ | ✅ | Same PDU to selected MAC; device support varies |
-| Identify filter by NameOfStation | ✅ | ✅ | ✅ | ✅ | One `02/02` block with the exact ASCII name, no BlockInfo/Qualifier; optional GUI field; one request per action |
+| Identify filter by NameOfStation | ✅ | ✅ | ✅ | ✅ | One `02/02` block with the exact ASCII name, no BlockInfo/Qualifier; optional GUI field; one request per action. Also the read-only revalidation fallback for a target that ignores unicast Identify (response MAC must still match) |
+| Repeated Identify monitoring | ✅ | ✅ | ✅ | ✅ | `MonitorService` repeats one ordinary Identify per configured interval (≥ 1 s, still rate-limited) and diffs NameOfStation, IP, role, IDs, alias, instance and options; read-only and user-started |
 | Hello | — | ✅ | — | 🟡 | Decoded passively; not emitted |
 | Passive DCP capture | — | ✅ | — | ✅ | All four DCP FrameIDs |
 | Dedupe by (interface, MAC) | — | — | — | ✅ | Partial responses merged |
@@ -43,38 +45,46 @@ Legend:
 | Get MAC block | ✅ | ✅ | ✅ | ✅ | Ethernet source is authoritative |
 | RSI / protocol properties, CIM interface | — | ✅ | — | ✅ | `02/0a`, `02/0b`, `07/05` named from the Wireshark dissector; values preserved as hex, not interpreted |
 | Control/Response error decode | — | ✅ | — | ✅ | Codes `0x00`–`0x07` |
-| Set NameOfStation | ✅ | ✅ | ✅ | ✅ | `02/02`; configuration mode + per-operation confirmation + fresh revalidation; read-back Get |
+| Set NameOfStation | ✅ | ✅ | ✅ | ✅ | `02/02`; per-operation confirmation + fresh revalidation; read-back Get |
 | Set IP parameters | ✅ | ✅ | ✅ | ✅ | `01/02`; 12-byte suite; temp/permanent qualifier; read-back Get |
 | ResetToFactorySettings | ✅ | ✅ | ✅ | ✅ | `05/06`; modes 1/2/4/8 only; per-operation confirmation; post-check |
 
-## 3. Configuration (guarded)
+Get accepts arbitrary `Option/SubOption` selectors through the codec and
+`dcp-cli get --selector OPTION/SUBOPTION` (repeatable); the GUI exposes named
+presets only. There is no arbitrary-Set editor: Set is limited to the
+sub-options listed above.
+
+## 3. Configuration
 
 | Capability | Wire format | Semantics | Status | Reason |
 |---|---|---|---|---|
-| Set NameOfStation | `02/02` + BlockQualifier `0x0000`/`0x0001` | Temporary/permanent | ✅ | Configuration mode, per-operation confirmation, fresh revalidation, read-back Get; no retry |
+| Set NameOfStation | `02/02` + BlockQualifier `0x0000`/`0x0001` | Temporary/permanent | ✅ | Per-operation confirmation, fresh revalidation, read-back Get; no retry |
 | Set IP parameter | `01/02` + 12-byte suite + qualifier | Temporary/permanent; may drop communication | ✅ | Same safeguards; discovery does not prove the IP is unused |
 | Set Full IP suite | `01/03` | DNS fields | ⛔ | DNS layout not fully verified |
 | Set DHCP parameters | `03/xx` | DHCP control | ➖ | Not implemented |
 | Multi-block Start/Stop transaction | `05/01` + `05/02` | Global qualifier | ➖ | Not needed for the single-block writes; no multi-block UI |
-| Device signaling / LED | `05/03` | BlockQualifier `0x0000` + SignalValue `0x0100` | ✅ | Implemented as an **unguarded** identification action (no configuration mode; one unicast frame, rate-limited, no retry, no state change). Acknowledged by the lab device; the LED effect itself is not observable over DCP |
+| Device signaling / LED | `05/03` | BlockQualifier `0x0000` + SignalValue `0x0100` | ✅ | Implemented as a **plain** identification action (no confirmation; one unicast frame, rate-limited, no retry, no state change). Acknowledged by the lab device; the LED effect itself is not observable over DCP |
 
-## 4. Reset (guarded)
+## 4. Reset
 
 | Variant | Wire format | Mode/qualifier | Status | Notes |
 |---|---|---|---|---|
-| ResetToFactorySettings | `05/06` | `mode << 1`; modes 1,2,4,8 transmitted | ✅ | Guarded; erased scope and post-reset behavior vendor-specific. Observed in one lab: modes 2 and 8 acknowledged, modes 1 and 4 rejected with block error `0x02` |
-| Legacy FactoryReset | `05/05` | BlockQualifier `0x0000` (no mode field) | ✅ | Guarded; full reset — p-net sets reset mode 99 and ignores the qualifier, so the erased scope cannot be selected. Observed in one lab: acknowledged with block error `0x00` |
-| Reset application data | `05/06`, qualifier `0x0002` | mode 1 | ✅ | Guarded; device support varies — one lab device rejected it with block error `0x02` |
-| Reset communication parameters | `05/06`, qualifier `0x0004` | mode 2 | ✅ | Guarded; one lab device acknowledged it and cleared name/IP |
+| ResetToFactorySettings | `05/06` | `mode << 1`; modes 1,2,4,8 transmitted | ✅ | Confirmed; erased scope and post-reset behavior vendor-specific. Observed in one lab: modes 2 and 8 acknowledged, modes 1 and 4 rejected with block error `0x02` |
+| Legacy FactoryReset | `05/05` | BlockQualifier `0x0000` (no mode field) | ✅ | Confirmed; full reset — p-net sets reset mode 99 and ignores the qualifier, so the erased scope cannot be selected. Observed in one lab: acknowledged with block error `0x00` |
+| Reset application data | `05/06`, qualifier `0x0002` | mode 1 | ✅ | Confirmed; device support varies — one lab device rejected it with block error `0x02` |
+| Reset communication parameters | `05/06`, qualifier `0x0004` | mode 2 | ✅ | Confirmed; one lab device acknowledged it and cleared name/IP |
 | Reset engineering parameters | `05/06`, qualifier `0x0006` | mode 3 | ❔ | Table value only; encoder refuses it |
-| Reset all except security | `05/06`, qualifier `0x0008` | mode 4 | ✅ | Guarded; device support varies |
-| Reset all to factory values | `05/06`, qualifier `0x0010` | mode 8 | ✅ | Guarded; not all data is guaranteed erased |
+| Reset all except security | `05/06`, qualifier `0x0008` | mode 4 | ✅ | Confirmed; device support varies |
+| Reset all to factory values | `05/06`, qualifier `0x0010` | mode 8 | ✅ | Confirmed; not all data is guaranteed erased |
 | Reset and restore | `05/06`, qualifier `0x0012` | mode 9 | ❔ | Not verified; encoder refuses it |
 
 No batch, broadcast, or multi-device reset path exists. Every reset is preceded
-by a fresh unicast Identify and requires an explicit confirmation (per operation
+by a fresh read-only Identify (unicast, with one NameOfStation-filtered
+multicast fallback for devices that ignore unicast) and requires an explicit
+confirmation (per operation
 in the Reset tab; once per run for the declared device under test in the Test
-Runner). Acknowledged resets are followed by an optional read-only post-check;
+Runner). Acknowledged resets are followed by an optional read-only post-check,
+polled inside a bounded, cancellable window because the device may reboot;
 acknowledgement is not proof of completion.
 
 ## 5. Reporting and testing
@@ -90,8 +100,9 @@ acknowledgement is not proof of completion.
 | Interface/capture readiness tests | ✅ | Read-only |
 | Identify discovery test | ✅ | Inconclusive on no response |
 | Identity block completeness | ✅ | Vendor/device ID and supported options required; missing name/IP reported as a warning |
+| Duplicate name/IP detection | ✅ | `protocol.address_conflicts`: compares the discovered devices and fails when one NameOfStation or IPv4 parameter is advertised by more than one MAC; discovery also emits a warning for every duplicate |
 | Unicast Identify test | ✅ | Device acceptance varies; inconclusive if unanswered |
-| Before/after identity comparison | ✅ | Read-only or after a guarded write; records name/IP/ID changes |
+| Before/after identity comparison | ✅ | Read-only or after a write; records name/IP/ID changes |
 | Get request/response test | ✅ | Offline mock and live read-only Get |
 | Block-error decoding test | ✅ | Codes `0x00`–`0x07` |
 | Bounded repeat discovery | ✅ | 3 requests, rate-limited |
@@ -99,15 +110,15 @@ acknowledgement is not proof of completion.
 | Parser/malformed fixtures | ✅ | Offline only |
 | PCAP roundtrip | ✅ | Offline |
 | Station-name/IP validation | ✅ | Offline |
-| Set/Reset tests | ✅ | Part of the device validation and full validation suites; configuration mode plus a declared device under test, one frame per operation, read-back |
+| Set/Reset tests | ✅ | Part of the device validation and full validation suites; a declared device under test, one frame per operation, read-back and a bounded polling post-check after a reset |
 | Grouped test catalogue and read-only suites | ✅ | Categories from `TEST_GROUPS`; the device read-only and tool self-test suites never contain a state-changing test |
 
 ### 5.1 Operator surfaces
 
 | Surface | Status | Notes |
 |---|---|---|
-| Desktop GUI (`dcp-studio`) | ✅ | Seven tabs, worker threads, confirmation dialog |
-| Headless CLI (`dcp-cli`, `python -m dcpstudio COMMAND`) | ✅ | Same services, codec, operations catalogue and safety gate as the GUI. Read-only `interfaces`/`discover`/`get`/`pcap`, unguarded `signal`, guarded `set-name`/`set-ip`/`reset` requiring all three safety flags, read-only `tests` (guarded test IDs refused), JSON output and JSON/HTML reports. No batch or broadcast path |
+| Desktop GUI (`dcp-studio`) | ✅ | Eight tabs, worker threads, confirmation dialog |
+| Headless CLI (`dcp-cli`, `python -m dcpstudio COMMAND`) | ✅ | Same services, codec, operations catalogue and safety gate as the GUI. `interfaces`/`discover`/`monitor`/`get`/`pcap`, `signal`, `set-name`/`set-ip`/`reset` with `--confirm`, and `tests` (write cases with `--include-writes --confirm --mac`), JSON output and JSON/HTML reports. No batch or broadcast path |
 
 ## 6. Out of scope
 

@@ -87,6 +87,7 @@ files = [
   "src/dcpstudio/outcomes.py",
   "src/dcpstudio/html_render.py",
   "src/dcpstudio/interfaces.py",
+  "src/dcpstudio/monitor.py",
   "src/dcpstudio/services/correlation.py",
 ]
 warn_unused_configs = true

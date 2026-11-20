@@ -5,7 +5,7 @@ from __future__ import annotations
 from ...codec import build_get_request, parse_frame
 from ...constants import Option, ServiceId, ServiceType
 from ...mock import MockNetwork, MockTransport, default_mock_devices
-from ...model import TestResult
+from ...model import TestResult, find_address_conflicts
 from ...services.discovery import DiscoveryConfig, DiscoveryService
 from ...services.get import GET_PRESETS, GetConfig
 
@@ -212,6 +212,63 @@ class ProtocolHandlersMixin:
             + (f"; {len(warnings)} name/IP observation(s)" if warnings else ""),
             evidence=evidence,
             warnings=warnings,
+        )
+
+    def _test_protocol_address_conflicts(self, case, cancel_event) -> TestResult:
+        ok, message = self._ensure_capture()
+        if not ok:
+            return self._result(case, "failed", message)
+        discovery = self._discovery()
+        base_config = DiscoveryConfig(
+            timeout_s=self.config.timeout_s,
+            response_delay_factor=self.config.response_delay_factor,
+            vlan_id=self.config.vlan_id,
+            min_request_interval_s=self.config.min_request_interval_s,
+        )
+        if self.latest_discovery is None or not self.latest_discovery.devices:
+            self.latest_discovery = discovery.discover(
+                base_config, cancel_event=cancel_event
+            )
+        if self.latest_discovery.cancelled:
+            return self._result(case, "skipped", "Cancelled during discovery")
+        devices = [
+            device
+            for device in self.latest_discovery.devices
+            if not any("after the configured timeout" in w for w in device.warnings)
+        ]
+        if not devices:
+            return self._result(
+                case,
+                "inconclusive",
+                "No device responded to Identify; there is nothing to compare.",
+                evidence={"discovery": self.latest_discovery.to_dict()},
+            )
+        conflicts = find_address_conflicts(devices)
+        evidence = {
+            "devices": [
+                {
+                    "mac": device.mac,
+                    "name": device.name_of_station,
+                    "ip": device.ip_address,
+                }
+                for device in devices
+            ],
+            "conflicts": [conflict.to_dict() for conflict in conflicts],
+        }
+        if conflicts:
+            return self._result(
+                case,
+                "failed",
+                f"{len(conflicts)} duplicate address(es) on the segment: "
+                + "; ".join(conflict.detail for conflict in conflicts)
+                + ". Fix the assignment before commissioning further.",
+                evidence=evidence,
+            )
+        return self._result(
+            case,
+            "passed",
+            f"{len(devices)} device(s) advertise unique NameOfStation and IPv4 values",
+            evidence=evidence,
         )
 
     def _test_protocol_unicast_identify(self, case, cancel_event) -> TestResult:

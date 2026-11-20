@@ -28,10 +28,12 @@ from ..model import (
     TransactionRecord,
     WriteResult,
 )
+from ..monitor import MonitorConfig, MonitorCycle, MonitorRun
 from ..safety import SafetyGate
 from ..services.capture import FrameRouter
 from ..services.discovery import DiscoveryConfig, DiscoveryService
 from ..services.get import GetConfig, GetService
+from ..services.monitor import MonitorService
 from ..services.rate_limit import RequestRateLimiter
 from ..services.signal import SignalService
 from ..services.write import WriteRequest, WriteService
@@ -56,6 +58,7 @@ class SessionController:
         self.get_service: GetService | None = None
         self.write_service: WriteService | None = None
         self.signal_service: SignalService | None = None
+        self.monitor_service: MonitorService | None = None
         self.safety_gate = SafetyGate()
         self.request_limiter: RequestRateLimiter | None = None
         self.last_readiness: Readiness | None = None
@@ -72,19 +75,18 @@ class SessionController:
         self.write_runs: list[WriteResult] = []
         self.transactions: list[TransactionRecord] = []
         self.latest_tests: list[TestResult] = []
+        self.latest_monitor: MonitorRun | None = None
+        self.monitor_runs: list[MonitorRun] = []
 
     # ------------------------------------------------------------ lifecycle
     def reset_session(self) -> None:
-        """Close the transport and forget everything about the old interface.
-
-        Configuration mode is disabled, so a new interface never inherits an
-        armed safety gate from the previous one.
-        """
+        """Close the transport and forget everything about the old interface."""
         self.close()
         self.discovery_service = None
         self.get_service = None
         self.write_service = None
         self.signal_service = None
+        self.monitor_service = None
         self.request_limiter = None
         self.last_readiness = None
         self.current_interface = None
@@ -100,7 +102,8 @@ class SessionController:
         self.write_runs.clear()
         self.transactions.clear()
         self.latest_tests = []
-        self.safety_gate.disable_configuration_mode()
+        self.latest_monitor = None
+        self.monitor_runs.clear()
 
     def open_interface(
         self,
@@ -139,6 +142,7 @@ class SessionController:
         self.get_service = services.getter
         self.write_service = services.writer
         self.signal_service = services.signal
+        self.monitor_service = services.monitor
         self.last_readiness = self.transport.readiness()
         return services
 
@@ -190,6 +194,28 @@ class SessionController:
             target_mac, config, cancel_event=cancel_event, progress=progress
         )
 
+    def monitor(
+        self,
+        config: MonitorConfig,
+        *,
+        cancel_event: threading.Event | None = None,
+        on_cycle: Callable[[MonitorCycle], None] | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> MonitorRun:
+        if self.monitor_service is None:
+            raise SessionNotReady("No interface is active.")
+        run = self.monitor_service.run(
+            config,
+            cancel_event=cancel_event,
+            on_cycle=on_cycle,
+            progress=progress,
+        )
+        self.latest_monitor = run
+        self.monitor_runs.append(run)
+        if len(self.monitor_runs) > 20:
+            self.monitor_runs = self.monitor_runs[-20:]
+        return run
+
     def signal(
         self,
         target_mac: str,
@@ -227,6 +253,7 @@ class SessionController:
         result: WriteResult,
         *,
         timeout_s: float,
+        recheck_window_s: float = 0.0,
         cancel_event: threading.Event | None = None,
         progress: ProgressCallback | None = None,
     ) -> WriteResult:
@@ -235,6 +262,7 @@ class SessionController:
         return self.write_service.post_check(
             result,
             timeout_s=timeout_s,
+            recheck_window_s=recheck_window_s,
             cancel_event=cancel_event,
             progress=progress,
         )

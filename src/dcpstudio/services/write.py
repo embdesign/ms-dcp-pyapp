@@ -2,13 +2,15 @@
 
 Every state-changing request passes through the same sequence:
 
-1. explicit configuration mode and per-operation confirmation (``SafetyGate``);
-2. a fresh unicast Identify to revalidate the selected target immediately
-   before transmission;
+1. per-operation confirmation (``SafetyGate``);
+2. a fresh read-only Identify to revalidate the selected target immediately
+   before transmission (unicast first; one NameOfStation-filtered multicast
+   fallback for a device that ignores unicast, MAC match required);
 3. exactly one unicast Set request, with no automatic retry;
 4. correlation by FrameID, ServiceID, Xid, source MAC and destination MAC;
 5. for Name/IP, one independent read-back Get (no retry);
-6. for reset, an optional user-triggered post-check by unicast Identify.
+6. for reset, an optional user-triggered post-check by read-only Identify,
+   polled inside a bounded window because the device may reboot.
 
 An acknowledgement is never reported as proof that a change persisted or that a
 reset completed. A timeout is reported as outcome unknown, not failure.
@@ -19,7 +21,7 @@ from __future__ import annotations
 import ipaddress
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -36,6 +38,8 @@ from ..codec import (
 )
 from ..constants import (
     DEFAULT_MIN_REQUEST_INTERVAL_S,
+    DEFAULT_POST_CHECK_WINDOW_S,
+    DEFAULT_RESPONSE_DELAY_FACTOR,
     SUPPORTED_RESET_MODES,
     ControlSubOption,
     DeviceSubOption,
@@ -48,6 +52,7 @@ from ..constants import (
 from ..model import (
     DcpFrame,
     DeviceIdentity,
+    DiscoveryResult,
     TransactionRecord,
     WriteResult,
     utc_now,
@@ -86,6 +91,7 @@ class WriteConfig:
     vlan_id: int | None = None
     min_request_interval_s: float = DEFAULT_MIN_REQUEST_INTERVAL_S
     verify_after_set: bool = True
+    post_check_window_s: float = DEFAULT_POST_CHECK_WINDOW_S
 
 
 @dataclass(slots=True)
@@ -101,6 +107,10 @@ class WriteRequest:
     gateway: str | None = None
     permanent: bool = True
     reset_mode: int | None = None
+    # Current NameOfStation forwarded from the selected device. It is only used
+    # for the read-only revalidation fallback (a filtered multicast Identify)
+    # when the target ignores unicast Identify; it never reaches the Set frame.
+    target_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -117,6 +127,131 @@ def identity_text(device: DeviceIdentity) -> str:
     return (
         f"{device.mac} | {name} | {device.ip_text} | {device.vendor_device_text}"
     )
+
+
+@dataclass(slots=True)
+class TargetProbe:
+    """One target revalidation: unicast Identify, then a filtered fallback."""
+
+    device: DeviceIdentity | None = None
+    unicast: DiscoveryResult | None = None
+    fallback: DiscoveryResult | None = None
+    cancelled: bool = False
+    error: str | None = None
+    fallback_used: bool = False
+    fallback_filtered: bool = False
+
+    @property
+    def results(self) -> list[DiscoveryResult]:
+        return [
+            discovery
+            for discovery in (self.unicast, self.fallback)
+            if discovery is not None
+        ]
+
+
+def probe_target(
+    discovery_service: DiscoveryService,
+    *,
+    target_mac: str,
+    target_name: str | None,
+    timeout_s: float,
+    vlan_id: int | None = None,
+    response_delay_factor: int = DEFAULT_RESPONSE_DELAY_FACTOR,
+    min_request_interval_s: float = DEFAULT_MIN_REQUEST_INTERVAL_S,
+    allow_unfiltered_fallback: bool = False,
+    cancel_event: threading.Event | None = None,
+    progress: Callable[[str], None] | None = None,
+    log: EventLog | None = None,
+) -> TargetProbe:
+    """Identify exactly one target; fall back to a filtered multicast Identify.
+
+    Some devices answer multicast Identify but ignore the unicast form, which
+    would otherwise block every guarded write. The fallback is still a *fresh*
+    read-only Identify, the response must come from the expected target MAC,
+    and the caller still compares the full identity text. Nothing new is sent
+    that the confirmed operation did not already require, and the write itself
+    is still single-shot.
+    """
+    cancel_event = cancel_event or threading.Event()
+    probe = TargetProbe()
+    try:
+        probe.unicast = discovery_service.discover(
+            DiscoveryConfig(
+                timeout_s=timeout_s,
+                response_delay_factor=response_delay_factor,
+                vlan_id=vlan_id,
+                unicast_mac=target_mac,
+                min_request_interval_s=min_request_interval_s,
+            ),
+            cancel_event=cancel_event,
+        )
+    except Exception as exc:
+        probe.error = f"Target revalidation failed: {type(exc).__name__}: {exc}"
+        return probe
+    if probe.unicast.cancelled:
+        probe.cancelled = True
+        return probe
+    probe.device = _device_by_mac(probe.unicast.devices, target_mac)
+    if probe.device is not None or probe.unicast.error:
+        return probe
+    filtered = bool(target_name)
+    if not filtered and not allow_unfiltered_fallback:
+        return probe
+    if progress:
+        progress(
+            "The target ignored the unicast Identify; retrying once with a "
+            + (
+                "NameOfStation-filtered multicast Identify…"
+                if filtered
+                else "multicast Identify…"
+            )
+        )
+    try:
+        probe.fallback = discovery_service.discover(
+            DiscoveryConfig(
+                timeout_s=timeout_s,
+                response_delay_factor=response_delay_factor,
+                vlan_id=vlan_id,
+                identify_filter_name=target_name,
+                min_request_interval_s=min_request_interval_s,
+            ),
+            cancel_event=cancel_event,
+        )
+    except Exception as exc:
+        probe.error = f"Fallback revalidation failed: {type(exc).__name__}: {exc}"
+        return probe
+    if probe.fallback.cancelled:
+        probe.cancelled = True
+        return probe
+    probe.device = _device_by_mac(probe.fallback.devices, target_mac)
+    probe.fallback_used = probe.device is not None
+    probe.fallback_filtered = filtered
+    if probe.fallback_used and log is not None:
+        try:
+            log(
+                "safety.revalidation_fallback",
+                "Target answered only a multicast Identify; revalidated by MAC"
+                + (" and NameOfStation" if filtered else ""),
+                {
+                    "target_mac": target_mac,
+                    "identify_filter_name": target_name,
+                    "xid": probe.fallback.xid,
+                },
+            )
+        except Exception:
+            pass
+    return probe
+
+
+def _device_by_mac(
+    devices: Iterable[DeviceIdentity], mac: str
+) -> DeviceIdentity | None:
+    wanted = mac.strip().replace("-", ":").lower()
+    for device in devices:
+        if device.mac.strip().replace("-", ":").lower() == wanted:
+            return device
+    return None
 
 
 class WriteService:
@@ -346,29 +481,25 @@ class WriteService:
         cancel_event: threading.Event,
         progress: Callable[[str], None] | None,
     ) -> bool:
-        """Step 1: fresh unicast Identify revalidation immediately before Set."""
+        """Step 1: fresh Identify revalidation immediately before Set."""
         cfg = request.config
         if progress:
-            progress("Revalidating target with one read-only unicast Identify…")
-        try:
-            revalidation = self.discovery_service.discover(
-                DiscoveryConfig(
-                    timeout_s=cfg.revalidate_timeout_s,
-                    vlan_id=cfg.vlan_id,
-                    unicast_mac=request.target_mac,
-                    min_request_interval_s=cfg.min_request_interval_s,
-                ),
-                cancel_event=cancel_event,
-            )
-        except Exception as exc:
-            result.state = RequestState.TARGET_UNVERIFIED
-            result.error = f"Target revalidation failed: {type(exc).__name__}: {exc}"
-            result.finished_at = utc_now()
-            result.warnings.append("No state-changing frame was transmitted.")
-            return False
-        result.transactions.extend(revalidation.transactions)
+            progress("Revalidating target with one read-only Identify…")
+        probe = probe_target(
+            self.discovery_service,
+            target_mac=request.target_mac,
+            target_name=request.target_name,
+            timeout_s=cfg.revalidate_timeout_s,
+            vlan_id=cfg.vlan_id,
+            min_request_interval_s=cfg.min_request_interval_s,
+            cancel_event=cancel_event,
+            progress=progress,
+            log=self._log,
+        )
+        for discovery in probe.results:
+            result.transactions.extend(discovery.transactions)
 
-        if revalidation.cancelled:
+        if probe.cancelled:
             result.state = RequestState.CANCELLED
             result.cancelled = True
             result.finished_at = utc_now()
@@ -377,29 +508,38 @@ class WriteService:
             )
             return False
 
-        target = next(
-            (
-                device
-                for device in revalidation.devices
-                if device.mac.lower() == request.target_mac.lower()
-            ),
-            None,
-        )
-        if target is None:
+        if probe.device is None:
             result.state = RequestState.TARGET_UNVERIFIED
-            result.error = (
-                "The selected target did not answer a fresh unicast Identify. "
-                "No Set/Reset frame was transmitted."
-            )
+            if probe.error:
+                result.error = probe.error
+            elif request.target_name:
+                result.error = (
+                    "The selected target did not answer a fresh unicast Identify or a "
+                    "NameOfStation-filtered multicast Identify. "
+                    "No Set/Reset frame was transmitted."
+                )
+            else:
+                result.error = (
+                    "The selected target did not answer a fresh unicast Identify. "
+                    "No Set/Reset frame was transmitted."
+                )
             result.finished_at = utc_now()
-            result.warnings.extend(revalidation.warnings)
+            result.warnings.append("No state-changing frame was transmitted.")
+            for discovery in probe.results:
+                result.warnings.extend(discovery.warnings)
             return False
-        result.before_identity = target
+
+        result.before_identity = probe.device
+        if probe.fallback_used:
+            result.warnings.append(
+                "The target ignored the unicast Identify; it was revalidated with a "
+                "NameOfStation-filtered multicast Identify and the MAC matched."
+            )
         try:
             self.safety.revalidate_target(
                 request.confirmation,
-                live_mac=target.mac,
-                live_identity=identity_text(target),
+                live_mac=probe.device.mac,
+                live_identity=identity_text(probe.device),
             )
         except SafetyError as exc:
             result.state = RequestState.TARGET_UNVERIFIED
@@ -831,54 +971,90 @@ class WriteService:
         result: WriteResult,
         *,
         timeout_s: float = 3.0,
+        recheck_window_s: float = 0.0,
         cancel_event: threading.Event | None = None,
         progress: Callable[[str], None] | None = None,
     ) -> WriteResult:
-        """One read-only unicast Identify after a reset.
+        """Read-only Identify after a reset, polled for a bounded window.
 
-        This proves only that the device answered at the same MAC. It does not
-        prove which reset mode the device implemented or what data was erased.
+        A reset may reboot the device, so with ``recheck_window_s`` > 0 the
+        read-only Identify is repeated until the device answers or the window
+        expires (cancellable, still rate-limited). It proves only that the
+        device answered at the same MAC; it does not prove which reset mode the
+        device implemented or what data was erased, and it is never a write
+        retry.
         """
         cancel_event = cancel_event or threading.Event()
-        if progress:
-            progress("Post-check: one read-only unicast Identify…")
-        discovery = self.discovery_service.discover(
-            DiscoveryConfig(
+        window_s = max(0.0, float(recheck_window_s))
+        deadline = time.monotonic() + window_s
+        attempts = 0
+        probe = TargetProbe()
+        while True:
+            attempts += 1
+            if progress:
+                progress(
+                    f"Post-check: read-only Identify attempt {attempts}…"
+                )
+            probe = probe_target(
+                self.discovery_service,
+                target_mac=result.target_mac,
+                target_name=None,
                 timeout_s=timeout_s,
                 vlan_id=result.vlan_id,
-                unicast_mac=result.target_mac,
                 min_request_interval_s=DEFAULT_MIN_REQUEST_INTERVAL_S,
-            ),
-            cancel_event=cancel_event,
-        )
-        result.post_check_xid = discovery.xid
-        result.post_checked_at = discovery.finished_at
-        result.transactions.extend(discovery.transactions)
-        result.transactions.sort(key=lambda record: record.timestamp)
-        if discovery.cancelled:
-            result.post_check_state = PostCheckState.CANCELLED
-            result.post_check_detail = "Post-check was cancelled by the user."
-            return result
-        target = next(
-            (
-                device
-                for device in discovery.devices
-                if device.mac.lower() == result.target_mac.lower()
-            ),
-            None,
-        )
-        if target is None:
+                allow_unfiltered_fallback=True,
+                cancel_event=cancel_event,
+                progress=progress,
+                log=self._log,
+            )
+            for discovery in probe.results:
+                result.post_check_xid = discovery.xid
+                result.post_checked_at = discovery.finished_at
+                result.transactions.extend(discovery.transactions)
+            result.transactions.sort(key=lambda record: record.timestamp)
+            if probe.cancelled:
+                result.post_check_state = PostCheckState.CANCELLED
+                result.post_check_detail = "Post-check was cancelled by the user."
+                return result
+            if probe.device is not None:
+                break
+            if window_s <= 0 or cancel_event.is_set() or time.monotonic() >= deadline:
+                break
+        if probe.device is None:
             result.post_check_state = PostCheckState.NO_RESPONSE
+            prefix = (
+                f"No Identify response after the reset within {window_s:.0f} s "
+                f"({attempts} attempts). "
+                if attempts > 1
+                else "No unicast Identify response after the reset. "
+            )
             result.post_check_detail = (
-                "No unicast Identify response after the reset. The device may still be "
-                "rebooting; this is outcome unknown and not proof of failure."
+                prefix
+                + "The device may still be rebooting; this is outcome unknown and "
+                "not proof of failure."
             )
             return result
         result.post_check_state = PostCheckState.RESPONDED
-        result.after_identity = target
+        result.after_identity = probe.device
+        extra = ""
+        if probe.fallback_used:
+            extra = (
+                " The device ignored the unicast Identify; it answered a "
+                + (
+                    "NameOfStation-filtered multicast Identify"
+                    if probe.fallback_filtered
+                    else "multicast Identify"
+                )
+                + " for the same MAC."
+            )
+        elif attempts > 1:
+            extra = (
+                f" It responded on attempt {attempts} of the {window_s:.0f} s window."
+            )
         result.post_check_detail = (
-            "Device answered a read-only unicast Identify after the reset. This proves "
+            "Device answered a read-only Identify after the reset. This proves "
             "reachability only; verify the expected name/IP scope independently."
+            + extra
         )
         return result
 

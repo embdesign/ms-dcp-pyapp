@@ -3,7 +3,7 @@
 Signal is an **identification aid, not a configuration change**: it stores
 nothing, interrupts nothing, and cannot move the device into another state. It
 is therefore deliberately **outside** the guarded write path in
-``services/write.py`` — no configuration mode, no authorization dialog, no
+``services/write.py`` — no confirmation dialog, no
 safe-maintenance attestation and no target revalidation.
 
 What is still enforced here:

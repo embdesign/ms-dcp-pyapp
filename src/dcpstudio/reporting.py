@@ -36,15 +36,15 @@ DISCLAIMER = (
 )
 
 KNOWN_LIMITATIONS: tuple[str, ...] = (
-    "State-changing operations require explicit configuration mode, per-operation "
-    "confirmation and fresh target revalidation. They are not automatic or batchable.",
+    "State-changing operations require a per-operation confirmation and fresh "
+    "target revalidation. They are not automatic or batchable.",
     "Only ResetToFactorySettings modes 1, 2, 4 and 8 are transmitted. Modes 3 and 9 "
     "are documented by Wireshark but were not verified on hardware.",
     "A DCP acknowledgement is not proof that a value persisted or that a reset "
     "completed. Name/IP writes use one read-only read-back; reset uses an optional "
     "post-check that proves reachability only.",
     "DCP Signal (05/03) is sent as one unicast frame with qualifier 0x0000 and "
-    "SignalValue 0x0100. It is not a guarded operation and changes no stored "
+    "SignalValue 0x0100. It is not a state-changing operation and changes no stored "
     "configuration; a DCP acknowledgement only proves the request was accepted, "
     "not that the LED was visible.",
     "DCP is Layer-2 link-local. Discovery does not traverse IP routers and is "

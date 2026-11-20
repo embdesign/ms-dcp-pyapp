@@ -26,15 +26,16 @@ def _app() -> QApplication:
     return QApplication.instance() or create_application(["dcpstudio-test"])
 
 
-def test_window_has_seven_tabs_and_guarded_state_changing_controls():
+def test_window_has_eight_tabs_and_state_changing_controls():
     app = _app()
     window = MainWindow()
     try:
-        assert window.tabs.count() == 7
+        assert window.tabs.count() == 8
         # Tab text is compared as set: Qt requires '&&' to display a literal
         # '&', because a single '&' introduces a mnemonic.
-        assert [window.tabs.tabText(i) for i in range(7)] == [
+        assert [window.tabs.tabText(i) for i in range(8)] == [
             "Interfaces && Discovery",
+            "Monitor",
             "Device Details",
             "Configuration",
             "Reset",
@@ -48,12 +49,10 @@ def test_window_has_seven_tabs_and_guarded_state_changing_controls():
         assert window.signal_button.isEnabled() is False
         assert window.cancel_config_write_button.isEnabled() is False
         assert window.cancel_reset_button.isEnabled() is False
-        assert window.config_mode_button.isEnabled() is True
-        assert window.safety_gate.configuration_mode is False
         # The catalogue is rendered grouped: one header row per category plus
         # one row per test, and every test starts deselected.
         assert window.test_table.columnCount() == 5
-        assert len(window._test_row_by_id) == len(TEST_CASES) == 21
+        assert len(window._test_row_by_id) == len(TEST_CASES) == 22
         assert len(window._group_row_by_category) == len(TEST_GROUPS) == 6
         assert all(
             window.test_table.item(row, 0).checkState() == Qt.CheckState.Unchecked
@@ -97,9 +96,9 @@ def test_configuration_tab_scrolls_instead_of_squeezing_fields():
     try:
         window.show()
         window.resize(1100, 760)
-        window.tabs.setCurrentIndex(2)
+        window.tabs.setCurrentWidget(window.configuration_tab)
         app.processEvents()
-        page = window.tabs.widget(2)
+        page = window.configuration_tab
         assert isinstance(page, QScrollArea)
         assert page.widgetResizable() is True
         assert page.verticalScrollBar().isVisible() is True
@@ -122,9 +121,9 @@ def test_reset_tab_scrolls_and_keeps_its_mode_table_readable():
     try:
         window.show()
         window.resize(1100, 760)
-        window.tabs.setCurrentIndex(3)
+        window.tabs.setCurrentWidget(window.reset_tab)
         app.processEvents()
-        page = window.tabs.widget(3)
+        page = window.reset_tab
         assert isinstance(page, QScrollArea)
         assert page.widgetResizable() is True
         table = page.widget().findChild(QTableWidget)
@@ -164,8 +163,7 @@ def test_mock_capture_discovery_populates_tables():
         assert get_result.identity is not None
         assert "Get response received" in window.get_result_label.text()
         assert window.latest_get_result is get_result
-        # Signal is not a guarded operation: available with configuration mode OFF.
-        assert window.safety_gate.configuration_mode is False
+        # Signal is not a state change: available whenever a target is selected.
         assert window.signal_button.isEnabled() is True
     finally:
         window.close()
@@ -184,7 +182,6 @@ def test_guarded_write_updates_device_cache_and_report():
         app.processEvents()
         target = window.selected_device
         assert target is not None
-        window.safety_gate.enable_configuration_mode(explicit_authorization=True)
         window._update_config_controls()
         assert window.apply_name_button.isEnabled() is True
         assert window.signal_button.isEnabled() is True
@@ -266,8 +263,8 @@ def test_select_and_deselect_all_tests_buttons():
             window.test_table.item(row, 0).checkState() == Qt.CheckState.Checked
             for row in group_rows
         )
-        # The optional guarded tests are selectable too; running them still
-        # requires configuration mode, a target and per-operation confirmation.
+        # The optional state-changing tests are selectable too; running them
+        # still requires a declared device under test.
         guarded = {
             window.test_table.item(row, 1).text()
             for row in selectable

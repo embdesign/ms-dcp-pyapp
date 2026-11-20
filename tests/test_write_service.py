@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from dcpstudio.codec import parse_frame
+from dcpstudio.constants import DCP_MULTICAST_MAC, ServiceId
 from dcpstudio.mock import MockNetwork, MockTransport, default_mock_devices
 from dcpstudio.safety import ConfirmationRequest, SafetyGate
 from dcpstudio.services.discovery import DiscoveryConfig, DiscoveryService
@@ -45,7 +48,6 @@ def _setup(*, apply_set: bool = True, delay_s: float = 0.0):
     discovery = DiscoveryService(transport, limiter=limiter)
     getter = GetService(transport, limiter=limiter)
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     writer = WriteService(
         transport,
         discovery_service=discovery,
@@ -77,6 +79,74 @@ def _confirmation(target, kind: str = "set_name"):
         proposed_parameters={"test": True},
         destructiveness="factory-reset" if factory else "state-changing",
     )
+
+
+def _setup_with_network(network: MockNetwork):
+    transport = MockTransport(network)
+    transport.start_capture()
+    limiter = RequestRateLimiter(0.02)
+    discovery = DiscoveryService(transport, limiter=limiter)
+    getter = GetService(transport, limiter=limiter)
+    gate = SafetyGate()
+    writer = WriteService(
+        transport,
+        discovery_service=discovery,
+        get_service=getter,
+        safety=gate,
+        limiter=limiter,
+    )
+    transport.set_frame_callback(
+        lambda raw, ts, direction: (
+            discovery.process_frame(raw, ts, direction),
+            getter.process_frame(raw, ts, direction),
+            writer.process_frame(raw, ts, direction),
+        )
+    )
+    target = discovery.discover(DiscoveryConfig(timeout_s=0.5)).devices[0]
+    return transport, writer, target
+
+
+def _is_unicast_identify(raw: bytes) -> bool:
+    frame = parse_frame(raw)
+    return (
+        frame.service_id == int(ServiceId.IDENTIFY)
+        and (frame.dst_mac or "").lower() != DCP_MULTICAST_MAC
+    )
+
+
+class _UnicastDeafNetwork(MockNetwork):
+    """Answers multicast Identify but ignores the unicast form."""
+
+    def handle_request(self, raw: bytes) -> list[bytes]:
+        if _is_unicast_identify(raw):
+            return []
+        return super().handle_request(raw)
+
+
+class _DropIdentifyNetwork(MockNetwork):
+    """Ignores the next ``drop`` Identify requests (simulated reboot)."""
+
+    def __init__(self, *args, drop: int = 0, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.drop = drop
+        self._drop_lock = threading.Lock()
+
+    def handle_request(self, raw: bytes) -> list[bytes]:
+        if parse_frame(raw).service_id == int(ServiceId.IDENTIFY):
+            with self._drop_lock:
+                if self.drop > 0:
+                    self.drop -= 1
+                    return []
+        return super().handle_request(raw)
+
+
+class _SilentIdentifyNetwork(MockNetwork):
+    """Answers nothing to Identify, so a post-check cannot succeed."""
+
+    def handle_request(self, raw: bytes) -> list[bytes]:
+        if parse_frame(raw).service_id == int(ServiceId.IDENTIFY):
+            return []
+        return super().handle_request(raw)
 
 
 def test_set_name_is_acknowledged_and_verified():
@@ -152,16 +222,15 @@ def test_unconfirmed_write_is_blocked_without_transmission():
     assert device.name == DEVICE.name
 
 
-def test_configuration_mode_off_blocks_write():
-    device, transport, _, _, writer, gate, target = _setup()
-    gate.disable_configuration_mode()
+def test_missing_authorization_blocks_write_without_transmission():
+    device, transport, _, _, writer, _, target = _setup()
     try:
         result = writer.execute(
             WriteRequest(
                 "set_name",
                 target.mac,
                 _confirmation(target),
-                _auth(),
+                WriteAuthorization(),
                 _config(),
                 name="line-77.tested",
                 permanent=True,
@@ -401,7 +470,6 @@ def test_set_readback_mismatch_is_reported():
     discovery = DiscoveryService(transport, limiter=limiter)
     getter = GetService(transport, limiter=limiter)
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     writer = WriteService(
         transport,
         discovery_service=discovery,
@@ -453,7 +521,6 @@ def test_set_service_not_supported_is_reported():
     discovery = DiscoveryService(transport, limiter=limiter)
     getter = GetService(transport, limiter=limiter)
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     writer = WriteService(
         transport,
         discovery_service=discovery,
@@ -506,7 +573,6 @@ def test_set_timeout_is_outcome_unknown():
     discovery = DiscoveryService(transport, limiter=limiter)
     getter = GetService(transport, limiter=limiter)
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     writer = WriteService(
         transport,
         discovery_service=discovery,
@@ -556,7 +622,6 @@ def test_set_response_from_wrong_source_is_ignored():
     discovery = DiscoveryService(transport, limiter=limiter)
     getter = GetService(transport, limiter=limiter)
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     writer = WriteService(
         transport,
         discovery_service=discovery,
@@ -609,7 +674,6 @@ def test_reset_post_check_no_response_is_unknown():
     discovery = DiscoveryService(transport, limiter=limiter)
     getter = GetService(transport, limiter=limiter)
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     writer = WriteService(
         transport,
         discovery_service=discovery,
@@ -667,7 +731,6 @@ def test_cancel_after_set_transmission_reports_unknown_outcome():
     discovery = DiscoveryService(transport, limiter=limiter)
     getter = GetService(transport, limiter=limiter)
     gate = SafetyGate()
-    gate.enable_configuration_mode(explicit_authorization=True)
     writer = WriteService(
         transport,
         discovery_service=discovery,
@@ -743,3 +806,136 @@ def test_guarded_service_refuses_signal():
     finally:
         transport.close()
     assert device.name == DEVICE.name
+
+
+def test_revalidation_falls_back_to_a_filtered_multicast_identify():
+    """A target that ignores unicast Identify is still revalidated by name+MAC."""
+    device = default_mock_devices()[0]
+    transport, writer, target = _setup_with_network(_UnicastDeafNetwork([device]))
+    try:
+        result = writer.execute(
+            WriteRequest(
+                "set_name",
+                target.mac,
+                _confirmation(target),
+                _auth(),
+                _config(),
+                name="line-77.tested",
+                permanent=True,
+                target_name=target.name_of_station,
+            )
+        )
+    finally:
+        transport.close()
+    assert result.state == "acknowledged"
+    assert result.verification == "verified"
+    assert device.name == "line-77.tested"
+    assert result.before_identity is not None
+    assert any("NameOfStation-filtered multicast Identify" in w for w in result.warnings)
+    identify_details = [
+        t.detail for t in result.transactions if t.event == "identify_request"
+    ]
+    assert any("unicast to" in detail for detail in identify_details)
+    assert any("NameOfStation filter" in detail for detail in identify_details)
+    # Exactly one Set frame; the fallback is read-only.
+    assert [t.event for t in result.transactions].count("set_request") == 1
+
+
+def test_without_a_station_name_a_unicast_deaf_target_stays_unverified():
+    device = default_mock_devices()[0]
+    original_name = device.name
+    transport, writer, target = _setup_with_network(_UnicastDeafNetwork([device]))
+    try:
+        result = writer.execute(
+            WriteRequest(
+                "set_name",
+                target.mac,
+                _confirmation(target),
+                _auth(),
+                _config(),
+                name="line-77.tested",
+                permanent=True,
+            )
+        )
+    finally:
+        transport.close()
+    assert result.state == "target_unverified"
+    assert result.transmitted is False
+    assert result.request_frame_hex == ""
+    assert device.name == original_name
+
+
+def test_post_check_polls_within_the_recheck_window():
+    device = default_mock_devices()[0]
+    transport, writer, target = _setup_with_network(MockNetwork([device]))
+    try:
+        result = writer.execute(
+            WriteRequest(
+                "reset",
+                target.mac,
+                _confirmation(target, "reset"),
+                _auth(),
+                _config(),
+                reset_mode=8,
+            )
+        )
+        assert result.state == "acknowledged"
+        # Two Identify requests per attempt (unicast + fallback): drop the first
+        # four so the device answers on the third attempt.
+        transport.network = _DropIdentifyNetwork([device], drop=4)
+        result = writer.post_check(
+            result, timeout_s=0.5, recheck_window_s=5.0
+        )
+    finally:
+        transport.close()
+    assert result.post_check_state == "responded"
+    assert "attempt 3" in result.post_check_detail
+
+
+def test_post_check_reports_no_response_after_the_window():
+    device = default_mock_devices()[0]
+    transport, writer, target = _setup_with_network(MockNetwork([device]))
+    try:
+        result = writer.execute(
+            WriteRequest(
+                "reset",
+                target.mac,
+                _confirmation(target, "reset"),
+                _auth(),
+                _config(),
+                reset_mode=8,
+            )
+        )
+        assert result.state == "acknowledged"
+        transport.network = _SilentIdentifyNetwork([device])
+        result = writer.post_check(
+            result, timeout_s=0.5, recheck_window_s=2.5
+        )
+    finally:
+        transport.close()
+    assert result.post_check_state == "no_response"
+    assert "outcome unknown" in result.post_check_detail
+    assert "attempts" in result.post_check_detail
+
+
+def test_post_check_falls_back_to_a_multicast_identify():
+    device = default_mock_devices()[0]
+    transport, writer, target = _setup_with_network(MockNetwork([device]))
+    try:
+        result = writer.execute(
+            WriteRequest(
+                "reset",
+                target.mac,
+                _confirmation(target, "reset"),
+                _auth(),
+                _config(),
+                reset_mode=8,
+            )
+        )
+        assert result.state == "acknowledged"
+        transport.network = _UnicastDeafNetwork([device])
+        result = writer.post_check(result, timeout_s=0.5)
+    finally:
+        transport.close()
+    assert result.post_check_state == "responded"
+    assert "multicast Identify for the same MAC" in result.post_check_detail

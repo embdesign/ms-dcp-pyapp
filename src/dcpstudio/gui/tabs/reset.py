@@ -35,10 +35,10 @@ class ResetTabMixin:
         layout.setSpacing(10)
         layout.addWidget(
             banner(
-                "<b>Guarded reset.</b> ResetToFactorySettings uses DCP option 05 / "
+                "<b>Confirmed reset.</b> ResetToFactorySettings uses DCP option 05 / "
                 "sub-option 06 with BlockQualifier = mode &lt;&lt; 1. Device support and the "
-                "data actually erased are vendor-dependent. Every reset requires configuration "
-                "mode, per-operation authorization and safe-maintenance confirmation, and "
+                "data actually erased are vendor-dependent. Every reset requires "
+                "per-operation authorization and safe-maintenance confirmation, plus "
                 "target revalidation. No automatic retry or rollback exists.",
                 "Danger",
             )

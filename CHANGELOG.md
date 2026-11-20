@@ -8,7 +8,58 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Revalidation fallback for unicast-deaf devices.** When a target ignores the
+  unicast Identify, `WriteService` retries the read-only revalidation once with a
+  NameOfStation-filtered multicast Identify and still requires the target MAC
+  (and the full identity text) to match. Such writes are logged as
+  `safety.revalidation_fallback` and carry a warning in the result. A target
+  that answers neither form is still `target_unverified` and nothing is sent.
+- **Duplicate NameOfStation/IP detection.** Discovery now warns when two devices
+  advertise the same NameOfStation or IPv4 parameter, and the new read-only test
+  `protocol.address_conflicts` fails the run when it is present.
+- **Bounded post-reset re-check.** The read-only post-check polls the target
+  Identify inside a cancellable window (default 10 s) instead of a single
+  attempt, and falls back to an unfiltered multicast Identify for the same MAC
+  when the reset cleared the station name.
+
+### Changed
+
+- **No session-wide "configuration mode".** Set NameStation/IP and Reset are
+  reachable as soon as one target is selected; a single per-operation
+  confirmation (GUI dialog or `--confirm`) remains the gate, followed by the
+  same fresh unicast-Identify revalidation, single send and read-back. The
+  Configuration tab, status bar, About box, reports, Test Runner text and all
+  documentation no longer describe the tool as read-only-by-default.
+- `dcp-cli set-name` / `set-ip` / `reset` now require only `--confirm`
+  (`--enable-configuration` and `--safe-maintenance` were removed).
+- `dcp-cli tests` can run the `write.*` cases with the new
+  `--include-writes --confirm --mac` flags; `--name`, `--ip`/`--mask`,
+  `--gateway`, `--persistence` and `--reset-mode` supply the test values.
+
 ## [0.1.1] - 2026-11-19
+
+### Added
+
+- **Monitor tab and `dcp-cli monitor`** — user-started repeated Identify at a
+  configurable interval (minimum 1 s, still subject to the shared request
+  limiter) with change detection for added/removed devices and changed
+  NameOfStation, IP parameters, role, IDs, alias, instance and advertised DCP
+  options. Read-only: each cycle is one ordinary Identify transaction, the loop
+  lives in `services/monitor.py`, and the diff/vocabulary in the pure
+  `monitor.py`.
+
+### Changed
+
+- Documentation states the intentional DCP scope gaps explicitly: Hello is
+  decoded but never sent, Set Full IP suite (`01/03`, DNS) and the DHCP option
+  (`03/xx`) are not transmitted, Control Start/Stop multi-block transactions are
+  not used, reset modes 3 and 9 stay refused, Get accepts arbitrary selectors
+  only through the codec/CLI, and monitoring is user-started polling without
+  alerting or background scanning (`README.md`, `docs/protocol-support-matrix.md`).
+- `HANDOFF.md` verification numbers refreshed (254 tests) and the rebuilt
+  `0.1.1` artifacts recorded.
 
 ### Fixed
 

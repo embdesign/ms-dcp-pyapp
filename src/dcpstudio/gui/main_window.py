@@ -45,6 +45,7 @@ from .workers import (
     DiscoveryWorker,
     GetWorker,
     LogBridge,
+    MonitorWorker,
     PcapLoadWorker,
     PostCheckWorker,
     TestWorker,
@@ -133,6 +134,7 @@ class MainWindow(TabBuildersMixin, QMainWindow):
     get_service = _delegate("get_service")
     write_service = _delegate("write_service")
     signal_service = _delegate("signal_service")
+    monitor_service = _delegate("monitor_service")
     safety_gate = _delegate("safety_gate")
     request_limiter = _delegate("request_limiter")
     last_readiness = _delegate("last_readiness")
@@ -147,6 +149,7 @@ class MainWindow(TabBuildersMixin, QMainWindow):
     write_runs = _delegate("write_runs")
     transactions = _delegate("transactions")
     latest_tests = _delegate("latest_tests")
+    latest_monitor = _delegate("latest_monitor")
 
     def __init__(self) -> None:
         super().__init__()
@@ -164,12 +167,14 @@ class MainWindow(TabBuildersMixin, QMainWindow):
         self.get_worker: GetWorker | None = None
         self.write_worker: WriteWorker | None = None
         self.post_check_worker: PostCheckWorker | None = None
+        self.monitor_worker: MonitorWorker | None = None
         self.discovery_cancel = threading.Event()
         self.test_cancel = threading.Event()
         self.get_cancel = threading.Event()
         self.write_cancel = threading.Event()
         self.post_check_cancel = threading.Event()
         self.signal_cancel = threading.Event()
+        self.monitor_cancel = threading.Event()
         self.signal_worker = None
         self._config_target_mac: str | None = None
         self._refresh_after_state_tests = False
@@ -240,13 +245,22 @@ class MainWindow(TabBuildersMixin, QMainWindow):
         # Qt reads a single '&' in widget text as a mnemonic marker, so a
         # literal ampersand must be escaped as '&&' or it is swallowed and the
         # following letter is underlined ("Interfaces _Discovery").
-        self.tabs.addTab(self._build_discovery_tab(), "Interfaces && Discovery")
-        self.tabs.addTab(self._build_device_tab(), "Device Details")
-        self.tabs.addTab(self._build_config_tab(), "Configuration")
-        self.tabs.addTab(self._build_reset_tab(), "Reset")
-        self.tabs.addTab(self._build_test_tab(), "Test Runner")
-        self.tabs.addTab(self._build_capture_tab(), "Packet Capture")
-        self.tabs.addTab(self._build_logs_tab(), "Logs && Reports")
+        self.discovery_tab = self._build_discovery_tab()
+        self.monitor_tab = self._build_monitor_tab()
+        self.device_tab = self._build_device_tab()
+        self.configuration_tab = self._build_config_tab()
+        self.reset_tab = self._build_reset_tab()
+        self.test_tab = self._build_test_tab()
+        self.capture_tab = self._build_capture_tab()
+        self.logs_tab = self._build_logs_tab()
+        self.tabs.addTab(self.discovery_tab, "Interfaces && Discovery")
+        self.tabs.addTab(self.monitor_tab, "Monitor")
+        self.tabs.addTab(self.device_tab, "Device Details")
+        self.tabs.addTab(self.configuration_tab, "Configuration")
+        self.tabs.addTab(self.reset_tab, "Reset")
+        self.tabs.addTab(self.test_tab, "Test Runner")
+        self.tabs.addTab(self.capture_tab, "Packet Capture")
+        self.tabs.addTab(self.logs_tab, "Logs && Reports")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         outer.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
@@ -274,7 +288,7 @@ class MainWindow(TabBuildersMixin, QMainWindow):
         self.status_interface = QLabel("Interface: none")
         self.status_capture = QLabel("Capture: stopped")
         self.status_privileges = QLabel("Privileges: unknown")
-        self.status_safety = QLabel("Writes: OFF")
+        self.status_safety = QLabel("Writes: select one target")
         for widget in (
             self.status_interface,
             self.status_capture,
@@ -324,9 +338,9 @@ class MainWindow(TabBuildersMixin, QMainWindow):
 
     # -------------------------------------------------------------- shell
     def _on_tab_changed(self, index: int) -> None:
-        if index == 5:
+        if self.tabs.currentWidget() is self.capture_tab:
             self._repopulate_packet_table()
-        elif index == 6:
+        elif self.tabs.currentWidget() is self.logs_tab:
             self._update_report_preview()
 
     def _show_about(self) -> None:
@@ -339,8 +353,8 @@ class MainWindow(TabBuildersMixin, QMainWindow):
             "diagnostics and functional testing.</p>"
             "<p>Scapy 2.8.0 and PySide6. DCP framing implemented from p-net and "
             "IEC 61158-6-10 (Wireshark pn_dcp).</p>"
-            "<p><b>State-changing operations require configuration mode, per-operation "
-            "confirmation, and fresh target revalidation.</b></p>"
+            "<p><b>State-changing operations require a per-operation confirmation "
+            "and a fresh target revalidation.</b></p>"
             f"<p style='color:#8c1d12'>{esc(SENSITIVE_WARNING)}</p>",
         )
 
@@ -353,6 +367,7 @@ class MainWindow(TabBuildersMixin, QMainWindow):
         self.write_cancel.set()
         self.post_check_cancel.set()
         self.signal_cancel.set()
+        self.monitor_cancel.set()
         for worker in (
             self.discovery_worker,
             self.test_worker,
@@ -360,6 +375,7 @@ class MainWindow(TabBuildersMixin, QMainWindow):
             self.write_worker,
             self.post_check_worker,
             self.signal_worker,
+            self.monitor_worker,
         ):
             if worker is not None and worker.isRunning():
                 worker.wait(3500)

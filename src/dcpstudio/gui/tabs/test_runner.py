@@ -58,8 +58,8 @@ class TestRunnerTabMixin:
                 "ResetToFactorySettings to the device under test, because a device is "
                 "not validated until those have been attempted; each frame is sent "
                 "exactly once, revalidated and read back, with no retry and no "
-                "rollback. That needs configuration mode and a declared device under "
-                "test. The read-only suites transmit Identify/Get frames only.",
+                "rollback. That needs a declared device under test. The read-only "
+                "suites transmit Identify/Get frames only.",
                 "Warning",
             )
         )
@@ -246,8 +246,8 @@ class TestRunnerTabMixin:
                         description += " — DISABLED in this build."
                     elif not case.default_enabled:
                         description += (
-                            " — OPTIONAL: requires configuration mode, a selected target "
-                            "and per-operation confirmation."
+                            " — OPTIONAL: sends one state-changing frame to the "
+                            "declared device under test."
                         )
                     self.test_table.setItem(row, 4, _item(description))
                     if not case.implemented:
@@ -371,7 +371,7 @@ class TestRunnerTabMixin:
             "<b>State-changing tests selected.</b> Starting the run sends to "
             f"<b>{esc(target)}</b>, once each and without retry: {esc(operations)}. "
             "Name and IP come from the Configuration tab, the reset mode from the "
-            "Reset tab. Configuration mode must be ON."
+            "Reset tab. Starting the run is the confirmation for these operations."
         )
         self.test_write_declaration_label.setVisible(True)
 
@@ -394,8 +394,8 @@ class TestRunnerTabMixin:
     def _select_all_tests(self) -> None:
         """Check every selectable test, including the state-changing ones.
 
-        State-changing tests still need configuration mode and a declared device
-        under test, and every frame is sent once and read back. Tests that are not
+        State-changing tests still need a declared device under test, and every
+        frame is sent once and read back. Tests that are not
         implemented in this build remain disabled and cannot be checked.
         """
         self._apply_check_states(
@@ -516,7 +516,7 @@ class TestRunnerTabMixin:
 
         Selecting the device under test and pressing this button is the explicit
         declaration for the suite; the suite still runs through the write service
-        (configuration mode, fresh unicast revalidation, read-back) and is fixed
+        (fresh unicast revalidation, read-back) and is fixed
         at import time, so the operator knows exactly which operations run.
         """
         self._apply_suite(DEVICE_VALIDATION_SUITE)
@@ -530,6 +530,7 @@ class TestRunnerTabMixin:
             or self._get_running()
             or self._write_running()
             or self._post_check_running()
+            or self._monitor_running()
         ):
             QMessageBox.information(
                 self,
@@ -564,13 +565,6 @@ class TestRunnerTabMixin:
                     "No device under test",
                     "Select the device under test in the Test Runner before running "
                     "state-changing tests.",
-                )
-                return
-            if not self.safety_gate.configuration_mode:
-                QMessageBox.warning(
-                    self,
-                    "Configuration mode off",
-                    "Enable configuration mode before running state-changing tests.",
                 )
                 return
             write_parameters, error = self._write_test_parameters(sorted(write_tests))

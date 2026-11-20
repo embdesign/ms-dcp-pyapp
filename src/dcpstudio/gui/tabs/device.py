@@ -63,8 +63,8 @@ class DeviceTabMixin:
         self.signal_button = QPushButton("Signal device (flash LED)…")
         self.signal_button.setEnabled(False)
         self.signal_button.setToolTip(
-            "Guarded Set 05/03: asks the selected device to flash its identification "
-            "LED once. Requires configuration mode and per-operation confirmation."
+            "DCP Signal 05/03: asks the selected device to flash its identification "
+            "LED once. One unicast frame; changes no stored configuration."
         )
         self.signal_button.clicked.connect(self._start_signal)
         controls.addWidget(self.copy_mac_button)
@@ -155,6 +155,7 @@ class DeviceTabMixin:
             or self._tests_running()
             or self._write_running()
             or self._post_check_running()
+            or self._monitor_running()
         ):
             QMessageBox.information(
                 self,
@@ -380,6 +381,7 @@ class DeviceTabMixin:
             and not self._discovery_running()
             and not self._tests_running()
             and not self._get_running()
+            and not self._monitor_running()
         )
         self.get_blocks_button.setEnabled(
             has_device
@@ -388,6 +390,7 @@ class DeviceTabMixin:
             and not self._discovery_running()
             and not self._tests_running()
             and not self._get_running()
+            and not self._monitor_running()
         )
         if device is None:
             self.detail_title.setText("No device selected")
@@ -499,10 +502,9 @@ class DeviceTabMixin:
     def _start_signal(self) -> None:
         """Flash the selected device's LED: one unicast 05/03 frame.
 
-        Not a guarded operation: Signal stores nothing, interrupts nothing and
-        cannot change device state, so no configuration mode and no
-        authorization dialog are involved. It is still one request, unicast
-        only, with no retry.
+        Not a state-changing operation: Signal stores nothing, interrupts nothing
+        and cannot change device state, so no confirmation dialog is involved. It
+        is still one request, unicast only, with no retry.
         """
         if self._signal_running():
             return
@@ -512,6 +514,7 @@ class DeviceTabMixin:
             or self._get_running()
             or self._write_running()
             or self._post_check_running()
+            or self._monitor_running()
         ):
             QMessageBox.information(
                 self,

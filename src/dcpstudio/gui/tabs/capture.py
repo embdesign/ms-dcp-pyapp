@@ -113,7 +113,7 @@ class CaptureTabMixin:
     def _on_frame_ui(self, item: CapturedFrame) -> None:
         if not isinstance(item, CapturedFrame):
             return
-        if self.tabs.currentWidget() is self.tabs.widget(5) and (
+        if self.tabs.currentWidget() is self.capture_tab and (
             not self.dcp_only_check.isChecked()
             or (item.parsed is not None and item.parsed.is_dcp)
         ):
@@ -328,6 +328,7 @@ class CaptureTabMixin:
             or get_running
             or self._write_running()
             or self._post_check_running()
+            or self._monitor_running()
         )
         self.start_capture_button.setEnabled(ready and not capturing and not busy)
         self.stop_capture_button.setEnabled(capturing and not busy)
@@ -349,6 +350,11 @@ class CaptureTabMixin:
         )
         self.cancel_get_button.setEnabled(get_running)
         self.get_preset_combo.setEnabled(not get_running)
+        if hasattr(self, "start_monitor_button"):
+            self.start_monitor_button.setEnabled(
+                ready and not busy and not self._monitor_running()
+            )
+            self.stop_monitor_button.setEnabled(self._monitor_running())
         self.capture_state_label.setText(
             f"Capture: {'running' if capturing else 'stopped'}"
             + (f" · {self.current_interface.name}" if self.current_interface else "")

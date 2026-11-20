@@ -865,6 +865,28 @@ def test_without_a_station_name_a_unicast_deaf_target_stays_unverified():
     assert device.name == original_name
 
 
+@pytest.mark.parametrize("mode", [3, 9])
+def test_reset_modes_3_and_9_are_guarded_and_acknowledged(mode):
+    device, transport, _, _, writer, _, target = _setup()
+    try:
+        result = writer.execute(
+            WriteRequest(
+                "reset",
+                target.mac,
+                _confirmation(target, "reset"),
+                _auth(),
+                _config(),
+                reset_mode=mode,
+            )
+        )
+    finally:
+        transport.close()
+    assert result.state == "acknowledged"
+    assert result.block_qualifier == mode << 1
+    # p-net semantics: every mode >= 3 resets application and communication data.
+    assert device.name == ""
+
+
 def test_post_check_polls_within_the_recheck_window():
     device = default_mock_devices()[0]
     transport, writer, target = _setup_with_network(MockNetwork([device]))

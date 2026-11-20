@@ -446,9 +446,9 @@ def build_reset_to_factory_request(
 ) -> bytes:
     """Build a ResetToFactorySettings request (option 05 / sub-option 06).
 
-    The wire BlockQualifier is ``reset_mode << 1``. Only modes 1, 2, 4 and 8 are
-    accepted here; modes 3 and 9 are listed by Wireshark but were not verified
-    on hardware, so they are refused rather than guessed.
+    The wire BlockQualifier is ``reset_mode << 1``. Every mode defined by the
+    Wireshark/IEC 61158-6-10 table is accepted (1, 2, 3, 4, 8, 9); the erased
+    scope is vendor-specific and is stated in the confirmation text.
     """
     mode = int(reset_mode)
     if mode not in SUPPORTED_RESET_MODES:

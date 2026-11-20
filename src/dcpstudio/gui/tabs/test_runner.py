@@ -505,8 +505,10 @@ class TestRunnerTabMixin:
                 mode = self.reset_mode_combo.currentData()
                 if not isinstance(mode, int) or mode not in SUPPORTED_RESET_MODES:
                     return {}, (
-                        "ResetToFactorySettings: select reset mode 1/2/4/8 in the Reset "
-                        "tab first; the legacy 05/05 variant is not used by tests."
+                        "ResetToFactorySettings: select reset mode "
+                        + "/".join(str(m) for m in sorted(SUPPORTED_RESET_MODES))
+                        + " in the Reset tab first; the legacy 05/05 variant is not "
+                        "used by tests."
                     )
                 parameters[test_id] = {"reset_mode": int(mode)}
         return parameters, ""

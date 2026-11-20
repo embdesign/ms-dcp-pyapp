@@ -184,6 +184,17 @@ def test_reset_mode_8_post_checks_the_target(capsys):
     assert output["verification"] == "not_attempted"
 
 
+@pytest.mark.parametrize("mode", ["3", "9"])
+def test_reset_modes_3_and_9_are_transmitted(capsys, mode):
+    code = cli.main(
+        ["reset", *FAST, "--mac", DEVICE_MAC, "--mode", mode, *GUARDS, "--json"]
+    )
+    output = _json(capsys)
+    assert code == cli.EXIT_OK
+    assert output["state"] == "acknowledged"
+    assert output["block_qualifier"] == int(mode) << 1
+
+
 def test_legacy_reset_post_checks_the_target(capsys):
     code = cli.main(
         ["reset", *FAST, "--mac", DEVICE_MAC, "--legacy", *GUARDS, "--json"]
@@ -195,9 +206,9 @@ def test_legacy_reset_post_checks_the_target(capsys):
     assert output["block_qualifier"] == 0
 
 
-def test_reset_refuses_unverified_mode():
+def test_reset_refuses_reserved_mode():
     with pytest.raises(SystemExit) as excinfo:
-        cli.main(["reset", "--mac", DEVICE_MAC, "--mode", "3", *GUARDS])
+        cli.main(["reset", "--mac", DEVICE_MAC, "--mode", "5", *GUARDS])
     assert excinfo.value.code == 2
 
 

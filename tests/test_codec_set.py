@@ -85,8 +85,8 @@ def test_reset_request_golden_vector_mode_8():
     assert block.value == b""
 
 
-def test_reset_request_refuses_unverified_modes():
-    for mode in (0, 3, 5, 7, 9, 99):
+def test_reset_request_refuses_reserved_modes():
+    for mode in (0, 5, 6, 7, 10, 99):
         with pytest.raises(DcpEncodingError):
             build_reset_to_factory_request(SRC, DST, XID, mode)
 
@@ -148,6 +148,18 @@ def test_request_qualifier_matches_the_encoders():
 
     with pytest.raises(DcpEncodingError):
         request_qualifier("delete_everything")
+
+
+def test_reset_modes_cover_the_full_wireshark_table():
+    """Every named mode encodes as ``mode << 1``; reserved values are refused."""
+    expected = {1: 0x0002, 2: 0x0004, 3: 0x0006, 4: 0x0008, 8: 0x0010, 9: 0x0012}
+    for mode, qualifier in expected.items():
+        raw = build_reset_to_factory_request(SRC, DST, XID, mode)
+        assert parse_frame(raw).blocks[0].block_qualifier == qualifier
+        assert request_qualifier("reset", reset_mode=mode) == qualifier
+    for reserved in (0, 5, 6, 7, 10):
+        with pytest.raises(DcpEncodingError):
+            build_reset_to_factory_request(SRC, DST, XID, reserved)
 
 
 def test_signal_request_golden_vector():

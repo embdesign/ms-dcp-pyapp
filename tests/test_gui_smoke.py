@@ -68,8 +68,8 @@ def test_window_has_eight_tabs_and_state_changing_controls():
         assert window.dut_combo.count() == 1
         assert window.test_write_declaration_label.isHidden()
         assert "0 of" in window.test_selection_label.text()
-        assert window.reset_mode_combo.count() == 5
-        assert window.reset_mode_combo.itemData(4) == "legacy"
+        assert window.reset_mode_combo.count() == 7
+        assert window.reset_mode_combo.itemData(6) == "legacy"
         assert window.current_interface is None
         assert window.discover_button.isEnabled() is False
         window.interface_table.selectRow(0)

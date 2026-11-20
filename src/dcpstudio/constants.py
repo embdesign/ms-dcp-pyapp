@@ -160,9 +160,12 @@ BLOCK_QUALIFIER_PERMANENT = 0x0001
 # and p-net computes ``reset_mode = block_qualifier >> 1``. The values here are
 # the *shifted* mode values; the wire qualifier is ``mode << 1``.
 #
-# These semantics are used by the guarded reset workflow for modes 1, 2, 4 and
-# 8. Device support and the exact data erased are vendor-dependent; modes 3 and
-# 9 are listed for reference but refused by the encoder.
+# These semantics are used by the guarded reset workflow. Device support and
+# the exact data erased remain vendor-dependent: Wireshark only *names* the
+# modes (IEC 61158-6-10 section 4.3), while p-net implements
+# ``reset_mode == 1 || reset_mode >= 3`` as "application data" and
+# ``reset_mode == 2 || reset_mode >= 3`` as "communication parameters" — so on
+# a p-net-based device modes 3 and 9 are the full-reset variants.
 RESET_MODES: dict[int, str] = {
     0x0001: "Reset application data",
     0x0002: "Reset communication parameters",
@@ -185,11 +188,13 @@ LEGACY_FACTORY_RESET_QUALIFIER = 0x0000
 # flashes the LED for 3 s, so the 4-byte form is accepted by both.
 SIGNAL_VALUE_FLASH_ONCE = 0x0100
 
-# Reset modes this application is willing to transmit. Mode 3 (engineering
-# parameters) and mode 9 (reset and restore) are listed by Wireshark but were
-# not verified on hardware, so the encoder refuses them rather than guessing.
-# Mode 1, 2 and 4 have documented scope; mode 8 is the factory-reset variant.
-SUPPORTED_RESET_MODES: frozenset[int] = frozenset({0x0001, 0x0002, 0x0004, 0x0008})
+# Reset modes this application transmits. The qualifier encoding (``mode << 1``)
+# is confirmed by Wireshark and p-net for every value, including modes 3 and 9;
+# only the erased scope stays vendor-specific. All six are selectable behind the
+# same per-operation confirmation as the rest.
+SUPPORTED_RESET_MODES: frozenset[int] = frozenset(
+    {0x0001, 0x0002, 0x0003, 0x0004, 0x0008, 0x0009}
+)
 
 # Legacy FactoryReset (05/05) *is* implemented and reachable from the Reset tab,
 # the CLI and the test runner: see ``codec.build_factory_reset_legacy_request``

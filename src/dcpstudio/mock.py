@@ -304,8 +304,11 @@ class MockNetwork:
                 ControlSubOption.RESET_TO_FACTORY
             ):
                 mode = qualifier >> 1
-                if mode in (1, 2, 4, 8):
-                    if mode in (2, 4, 8):
+                if mode in (1, 2, 3, 4, 8, 9):
+                    # p-net semantics: mode 1 keeps the communication data,
+                    # mode 2 keeps the application data, every mode >= 3 resets
+                    # both (see pf_cmina_set_default_cfg).
+                    if mode != 1:
                         device.name = ""
                         device.ip = "0.0.0.0"
                         device.mask = "0.0.0.0"

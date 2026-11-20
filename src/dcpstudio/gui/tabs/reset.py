@@ -163,9 +163,11 @@ class ResetTabMixin:
         notes = QLabel(
             "<b>Legacy 05/05:</b> an older FactoryReset with no mode field. It is sent with "
             "BlockQualifier 0x0000 and performs a full reset (p-net sets reset mode 99, "
-            "\"reset all\"); the erased scope cannot be selected. <b>Unknown semantics:</b> "
-            "engineering reset (mode 3) and 'reset and restore' (mode 9) are listed by "
-            "Wireshark but were not verified on hardware, so they are not transmitted. A DCP "
+            "\"reset all\"); the erased scope cannot be selected. <b>Modes 3 and 9:</b> "
+            "the qualifier values are defined by Wireshark/IEC 61158-6-10, and a "
+            "p-net-based device treats every mode \u2265 3 as application plus "
+            "communication data; the exact scope is still vendor-specific, so read the "
+            "confirmation text. A DCP "
             "factory reset does not necessarily erase application data, firmware, or "
             "vendor-specific settings."
         )

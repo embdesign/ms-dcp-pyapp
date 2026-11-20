@@ -1293,7 +1293,7 @@ def build_parser() -> argparse.ArgumentParser:
     set_ip.set_defaults(handler=_cmd_set_ip)
 
     reset = subparsers.add_parser(
-        "reset", help="Reset: RTFS modes 1/2/4/8 or legacy 05/05 (--confirm)"
+        "reset", help="Reset: RTFS modes 1/2/3/4/8/9 or legacy 05/05 (--confirm)"
     )
     _add_interface_arguments(reset, timeout=2.0)
     reset.add_argument("--mac", required=True, metavar="MAC", help="Target device MAC")

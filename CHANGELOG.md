@@ -10,6 +10,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Reset modes 3 and 9 are transmitted.** `ResetToFactorySettings` now covers
+  every mode of the DCP reset table (1, 2, 3, 4, 8, 9), behind the same
+  per-operation confirmation, revalidation and post-check. Wireshark defines the
+  qualifier values (`0x0006` / `0x0012`) and p-net resets application **and**
+  communication data for every `reset_mode >= 3`; the erased scope remains
+  vendor-specific and is stated in the confirmation text.
 - **Revalidation fallback for unicast-deaf devices.** When a target ignores the
   unicast Identify, `WriteService` retries the read-only revalidation once with a
   NameOfStation-filtered multicast Identify and still requires the target MAC

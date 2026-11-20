@@ -265,7 +265,7 @@ only through the Configuration and Reset tabs (see §9).
 | Reset acknowledged, then no post-check response | The bounded post-check window expired without an Identify response. The device may still be rebooting. This is outcome unknown. Use **Verify target after reset** later; do not resend the reset automatically. |
 | Reset post-check responded | The device is reachable at the same MAC. This does not prove which data was erased or that the requested reset scope was implemented. |
 | Discovery warns about a duplicate NameOfStation/IP | Two devices advertise the same address, so they cannot be told apart or addressed unambiguously. Fix the assignment (one device at a time) before using Set/Reset by name or IP. |
-| Reset mode 3/9 unavailable | They are listed by Wireshark but were not verified on hardware, so the encoder refuses them. |
+| Reset mode 3/9 acknowledged, scope unclear | The qualifier is defined by Wireshark/IEC 61158-6-10 and a p-net-based device treats every mode ≥ 3 as application plus communication data, but other devices may erase less or more. Inspect the device state independently; the acknowledgement proves acceptance only. |
 | Signal acknowledged, no LED visible | A DCP acknowledgement proves only that the device accepted `05/03`. LED duration and colour are vendor-specific and cannot be observed over DCP. |
 | Signal `no response` / timeout | Treated as **outcome unknown**, not as "device does not support Signal". Check the interface, VLAN and privileges before repeating. |
 

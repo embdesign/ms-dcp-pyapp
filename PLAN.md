@@ -5,7 +5,7 @@ architecture Programme phases 0–7 are complete (2026-11-19)
 Application: `dcpstudio` 0.1.1
 Scope of this build: **PROFINET DCP discovery, passive decoding, Get,
 LED Signal, per-operation-confirmed NameOfStation/IP Set, verified
-reset variants (RTFS 1/2/4/8 and legacy `05/05`), post-checks, the functional
+reset variants (RTFS modes 1/2/3/4/8/9 and legacy `05/05`), post-checks, the functional
 test runner, diagnostics, PCAP, JSON/HTML reporting, and a headless CLI**
 
 ---
@@ -67,9 +67,13 @@ Full links and limitations: [`docs/references.md`](docs/references.md).
   `BlockLength`.
 - EtherType `0x8892` also carries PROFINET RT/PTCP/alarms; only FrameIDs
   `0xFEFC…0xFEFF` are DCP.
-- ResetToFactorySettings is `05/06`; the wire qualifier is `mode << 1`. Modes
-  1, 2, 4 and 8 are transmitted behind the safety gate. Modes 3 and 9 are listed
-  by Wireshark but were not verified on hardware and are refused by the encoder.
+- ResetToFactorySettings is `05/06`; the wire qualifier is `mode << 1`. All six
+  modes named by the Wireshark/IEC table (1, 2, 3, 4, 8, 9) are transmitted
+  behind the safety gate. Wireshark verifies the qualifier table; p-net
+  (`pf_cmina_set_default_cfg`) resets application data for
+  `reset_mode == 1 || reset_mode >= 3` and communication data for
+  `reset_mode == 2 || reset_mode >= 3`, so modes 3 and 9 are full-reset
+  variants on such a device. The erased scope stays vendor-specific.
 - Legacy FactoryReset is `05/05` with a 2-byte BlockQualifier; Wireshark reads
   `0x0000` as "Default" and any other value as reserved, and p-net ignores the
   qualifier and performs a full reset (reset mode 99, "reset all"). It is
@@ -326,9 +330,11 @@ procedure.
   longer timeout or per-selector investigation.
 - Get presets cover common selector sets; arbitrary Option/SubOption editing is
   not exposed in the GUI.
-- Set Name/IP, reset modes 1/2/4/8 and legacy `05/05` were acknowledged by one
-  lab device; modes 1 and 4 were rejected by that device with DCP block error
-  `0x02`. Device support remains vendor-dependent and a timeout is outcome
+- Set Name/IP and legacy `05/05` were acknowledged by one
+  lab device; RTFS modes 2 and 8 were acknowledged, modes 1 and 4 were rejected
+  with DCP block error `0x02`. Modes 3 and 9 are implemented but have not been
+  exercised on lab hardware. Device support remains vendor-dependent and a
+  timeout is outcome
   unknown.
 - Reset acknowledgement is not proof of completion. The post-check proves only
   that the device answered at the same MAC; it polls one read-only Identify
@@ -344,7 +350,9 @@ procedure.
 - Duplicate NameOfStation/IP values observed in one discovery are reported as
   warnings and by `protocol.address_conflicts`. Discovery cannot tell such
   devices apart, so fix the assignment before commissioning further.
-- Modes 3/9 are not transmitted.
+- All six reset modes of the DCP table are transmitted; modes 3 and 9 have no
+  lab evidence yet, so their erased scope is stated as vendor-specific in the
+  confirmation text.
 - Monitoring repeats Identify; it is not a PROFINET IO monitor. It reports only
   fields carried by Identify responses, has no alerting/persistence and stops
   reporting while another operation owns the session. A cycle with no response

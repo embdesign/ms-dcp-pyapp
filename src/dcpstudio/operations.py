@@ -106,7 +106,7 @@ def reset_mode_spec(mode: int) -> OperationSpec:
     return OperationSpec(
         operation_id=f"reset_mode_{mode}",
         operation_text="ResetToFactorySettings",
-        destructiveness=FACTORY_RESET if mode == 8 else STATE_CHANGING,
+        destructiveness=FACTORY_RESET if mode in (8, 9) else STATE_CHANGING,
         proposed_parameters={
             "Reset mode": str(mode),
             "Documented meaning": RESET_MODES.get(mode, "Unknown mode"),

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ...constants import DEFAULT_POST_CHECK_WINDOW_S
+from ...constants import DEFAULT_POST_CHECK_WINDOW_S, SUPPORTED_RESET_MODES
 from ...model import TestResult
 from ...operations import (
     OperationSpec,
@@ -231,9 +231,11 @@ class WriteHandlersMixin:
             return self._result(case, "failed", message)
         params = self.write_parameters.get(case.test_id, {})
         mode = int(params.get("reset_mode", 8))
-        if mode not in (1, 2, 4, 8):
+        if mode not in SUPPORTED_RESET_MODES:
             return self._result(
-                case, "skipped", f"Reset mode {mode} is not implemented by this build."
+                case,
+                "skipped",
+                f"Reset mode {mode} is not defined by the DCP reset-mode table.",
             )
         request, reason = self._prepare_guarded_write(
             case,

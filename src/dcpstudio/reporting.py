@@ -38,8 +38,9 @@ DISCLAIMER = (
 KNOWN_LIMITATIONS: tuple[str, ...] = (
     "State-changing operations require a per-operation confirmation and fresh "
     "target revalidation. They are not automatic or batchable.",
-    "Only ResetToFactorySettings modes 1, 2, 4 and 8 are transmitted. Modes 3 and 9 "
-    "are documented by Wireshark but were not verified on hardware.",
+    "All ResetToFactorySettings modes of the DCP reset-mode table (1, 2, 3, 4, 8, 9) "
+    "are transmitted. The qualifier encoding is verified; which data a mode erases "
+    "remains vendor-specific.",
     "A DCP acknowledgement is not proof that a value persisted or that a reset "
     "completed. Name/IP writes use one read-only read-back; reset uses an optional "
     "post-check that proves reachability only.",

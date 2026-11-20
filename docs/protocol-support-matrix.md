@@ -47,7 +47,7 @@ Legend:
 | Control/Response error decode | — | ✅ | — | ✅ | Codes `0x00`–`0x07` |
 | Set NameOfStation | ✅ | ✅ | ✅ | ✅ | `02/02`; per-operation confirmation + fresh revalidation; read-back Get |
 | Set IP parameters | ✅ | ✅ | ✅ | ✅ | `01/02`; 12-byte suite; temp/permanent qualifier; read-back Get |
-| ResetToFactorySettings | ✅ | ✅ | ✅ | ✅ | `05/06`; modes 1/2/4/8 only; per-operation confirmation; post-check |
+| ResetToFactorySettings | ✅ | ✅ | ✅ | ✅ | `05/06`; all modes 1/2/3/4/8/9; per-operation confirmation; post-check |
 
 Get accepts arbitrary `Option/SubOption` selectors through the codec and
 `dcp-cli get --selector OPTION/SUBOPTION` (repeatable); the GUI exposes named
@@ -69,14 +69,14 @@ sub-options listed above.
 
 | Variant | Wire format | Mode/qualifier | Status | Notes |
 |---|---|---|---|---|
-| ResetToFactorySettings | `05/06` | `mode << 1`; modes 1,2,4,8 transmitted | ✅ | Confirmed; erased scope and post-reset behavior vendor-specific. Observed in one lab: modes 2 and 8 acknowledged, modes 1 and 4 rejected with block error `0x02` |
+| ResetToFactorySettings | `05/06` | `mode << 1`; modes 1,2,3,4,8,9 transmitted | ✅ | Qualifier table verified by Wireshark and p-net; erased scope and post-reset behavior vendor-specific. Observed in one lab: modes 2 and 8 acknowledged, modes 1 and 4 rejected with block error `0x02` |
 | Legacy FactoryReset | `05/05` | BlockQualifier `0x0000` (no mode field) | ✅ | Confirmed; full reset — p-net sets reset mode 99 and ignores the qualifier, so the erased scope cannot be selected. Observed in one lab: acknowledged with block error `0x00` |
 | Reset application data | `05/06`, qualifier `0x0002` | mode 1 | ✅ | Confirmed; device support varies — one lab device rejected it with block error `0x02` |
 | Reset communication parameters | `05/06`, qualifier `0x0004` | mode 2 | ✅ | Confirmed; one lab device acknowledged it and cleared name/IP |
-| Reset engineering parameters | `05/06`, qualifier `0x0006` | mode 3 | ❔ | Table value only; encoder refuses it |
+| Reset engineering parameters | `05/06`, qualifier `0x0006` | mode 3 | ✅ | Transmitted; Wireshark names the mode and p-net resets application + communication data for every mode ≥ 3. No lab device has confirmed the scope yet |
 | Reset all except security | `05/06`, qualifier `0x0008` | mode 4 | ✅ | Confirmed; device support varies |
 | Reset all to factory values | `05/06`, qualifier `0x0010` | mode 8 | ✅ | Confirmed; not all data is guaranteed erased |
-| Reset and restore | `05/06`, qualifier `0x0012` | mode 9 | ❔ | Not verified; encoder refuses it |
+| Reset and restore | `05/06`, qualifier `0x0012` | mode 9 | ✅ | Transmitted; same caveat as mode 3 — full-reset variant on p-net, vendor-specific elsewhere |
 
 No batch, broadcast, or multi-device reset path exists. Every reset is preceded
 by a fresh read-only Identify (unicast, with one NameOfStation-filtered

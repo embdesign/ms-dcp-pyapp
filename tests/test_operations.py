@@ -62,17 +62,18 @@ def test_set_ip_spec_matches_the_wire_qualifier():
     assert spec.destructiveness == STATE_CHANGING
 
 
-def test_reset_mode_spec_is_factory_reset_for_mode_8_only():
-    for mode in (1, 2, 4):
+def test_reset_mode_spec_marks_the_factory_reset_variants():
+    for mode in (1, 2, 3, 4):
         spec = reset_mode_spec(mode)
         assert spec.operation_id == f"reset_mode_{mode}"
         assert spec.proposed_parameters["BlockQualifier"] == (
             f"0x{request_qualifier('reset', reset_mode=mode):04x}"
         )
         assert spec.destructiveness == STATE_CHANGING
-    factory = reset_mode_spec(8)
-    assert factory.destructiveness == FACTORY_RESET
-    assert factory.proposed_parameters["Reset mode"] == "8"
+    for mode in (8, 9):
+        factory = reset_mode_spec(mode)
+        assert factory.destructiveness == FACTORY_RESET
+        assert factory.proposed_parameters["Reset mode"] == str(mode)
 
 
 def test_legacy_reset_spec_has_no_mode_field():

@@ -17,7 +17,7 @@ Read this before changing code. It records only facts verified in this tree.
 
 ```bash
 uv sync                                     # create .venv + dev group
-uv run pytest                               # full suite (offscreen Qt, 297 tests)
+uv run pytest                               # full suite (offscreen Qt, 302 tests)
 uv run pytest --cov=dcpstudio --cov-report=term-missing
 uv run ruff check src tests tools           # configured lint gate (clean)
 uv run mypy                                 # typed gate for the pure modules (clean)
@@ -104,7 +104,11 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   `DEVICE_READ_ONLY_SUITE` and `TOOL_SELF_TEST_SUITE` must never contain a
   `write.*` test; `dcp-cli tests` runs them only with
   `--include-writes --confirm --mac`.
-- Reset modes 3 and 9 stay refused by the encoder (unverified semantics).
+- All six reset modes of the DCP table (**1, 2, 3, 4, 8, 9**) are transmitted
+  behind the same per-operation gate. The qualifier encoding (`mode << 1`) is
+  confirmed by Wireshark and p-net for every value; only the erased scope is
+  vendor-specific — p-net resets application **and** communication data for
+  every `reset_mode >= 3`. Keep that caveat in the operator text.
   Legacy FactoryReset (`05/05`) **is** implemented: BlockQualifier `0x0000`,
   full reset, no mode field, through the same gate.
 - DCP Signal (`05/03`) is **implemented and deliberately unconfirmed**: it lives

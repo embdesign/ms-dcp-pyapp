@@ -112,9 +112,12 @@ The reset mode is encoded in bits 1..15. Wireshark displays
 | `0x0012` | 9 | Reset and restore data |
 
 p-net computes `reset_mode = qualifier >> 1`; its own reset handling treats
-modes 1, 2, and ≥3 differently. The exact data erased is device/vendor-specific.
-This application transmits only modes 1, 2, 4 and 8. Modes 3 and 9 are listed by
-Wireshark but were not verified on hardware, so the encoder refuses them.
+modes 1, 2, and ≥3 differently (`pf_cmina_set_default_cfg` resets application
+data for `reset_mode == 1 || reset_mode >= 3` and communication data for
+`reset_mode == 2 || reset_mode >= 3`). The exact data erased is
+device/vendor-specific. This application transmits all six named modes; modes 3
+and 9 are full-reset variants on a p-net-based device and carry that caveat in
+the confirmation text.
 
 ### 3.4a Legacy FactoryReset (`05/05`)
 

@@ -42,7 +42,7 @@ config change was made.
   `utils.py`, `services/signal.py`, `testrunner/cases.py`, `gui/app.py`,
   `gui/workers.py`, `gui/confirmation.py`, `gui/presentation.py`, `gui/tabs/`),
   threading, safety table, phase table and limitations.
-- `AGENTS.md` — refreshed verified facts: 297 tests / ~132 s, `cli.py` as a
+- `AGENTS.md` — refreshed verified facts: 302 tests / ~137 s, `cli.py` as a
   consumer of `operations.py`, Signal exposed by the Device Details tab and
   `dcp-cli signal`, `dist/` rebuilt 2026-11-19 (0.1.1).
 - `README.md` — removed historical wording, refreshed the project layout and
@@ -61,7 +61,7 @@ Current capability summary (verified in the tree):
 - Read-only Get with presets and explicit DCP block-error decoding.
 - Unguarded DCP Signal (`05/03`, SignalValue `0x0100`): one unicast frame,
   rate-limited, never retried, never routed through `WriteService`.
-- Set NameOfStation, Set IP, RTFS modes 1/2/4/8 and legacy FactoryReset
+- Set NameOfStation, Set IP, RTFS modes 1/2/3/4/8/9 and legacy FactoryReset
   (`05/05`): per-operation confirmation, fresh read-only revalidation (unicast,
   with one NameOfStation-filtered multicast fallback for devices that ignore
   unicast), one frame, read-back Get (Set) or a bounded polling post-check
@@ -88,7 +88,7 @@ Current capability summary (verified in the tree):
 - The request was documentation-only: `PROMPT.md` and `PLAN.md` had to describe
   the implemented build, and obsolete text had to be removed from `AGENTS.md`,
   `HANDOFF.md`, `PLAN.md` and `README.md`.
-- Facts were re-verified against the tree before writing: 297 tests pass, the
+- Facts were re-verified against the tree before writing: 302 tests pass, the
   ruff gate is clean, PySide6 resolves to 6.12.0 and `dist/` was rebuilt on
   2026-11-19 (version 0.1.1).
 - Historical narrative (resolved review items, old coverage/refactor numbers,
@@ -102,8 +102,10 @@ Constraints a future agent must preserve:
 - Unicast-only guarded writes; no automatic retry, rollback, batch or broadcast.
 - A timeout is `outcome_unknown`, never "failed" or "proven absent".
 - An acknowledgement is never proof of persistence or reset completion.
-- Reset modes 3 and 9 stay refused; legacy `05/05` stays fixed at qualifier
-  `0x0000` with no selectable scope.
+- All six reset modes of the DCP table are transmitted behind the same gate;
+  legacy `05/05` stays fixed at qualifier
+  `0x0000` with no selectable scope. The erased scope of modes 3 and 9 is
+  vendor-specific (p-net resets application and communication data for ≥ 3).
 - Signal stays unguarded but single-frame; do not route it through
   `WriteService`.
 - `fixtures.py` stays in the package: the shipped test runner uses it.
@@ -112,7 +114,7 @@ Constraints a future agent must preserve:
 
 | Check | Command / procedure | Result |
 |---|---|---|
-| Full suite | `QT_QPA_PLATFORM=offscreen uv run pytest` | **PASS** — 297 passed in 131.90 s |
+| Full suite | `QT_QPA_PLATFORM=offscreen uv run pytest` | **PASS** — 302 passed in 137.23 s |
 | Lint gate | `uv run ruff check src tests tools` | **PASS** — all checks passed |
 | Package artifact inspection | `.venv/bin/python -m zipfile -l dist/dcp_studio-0.1.1-py3-none-any.whl` | **PASS** — contains `dcpstudio/cli.py`, `gui/app.py`, `services/signal.py`, `entry_points.txt`. `uv build` was re-run on 2026-11-19 for version 0.1.1. |
 | Sensitive-data review | manual read of all changed documents | **PASS** — lab vendor/model/MAC/IP/station identifiers remain withheld; only the synthetic examples `02:00:00:00:00:11` and `192.168.20.x` appear. |
@@ -174,7 +176,8 @@ outcome vocabulary requires. Request frames matched the documented layouts:
 Final state after the run: the device was left with no NameOfStation and its
 default address, i.e. nothing from the tests remains configured.
 
-**Not exercised even here:** reset modes 3/9 (refused by the encoder),
+**Not exercised even here:** reset modes 3/9 (implemented, but no lab device
+has confirmed their erased scope),
 power-cycle persistence of *permanent* values (no power control), and any other
 vendor's device. DCP Signal (`05/03`) *was* exercised: acknowledged with
 `blockError 0x00` and no confirmation dialog (`RTT` ≈ 32 ms); the LED

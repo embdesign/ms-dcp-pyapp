@@ -2,6 +2,9 @@
 
 Verification date: **2026-11-11**. Sub-option names added on **2026-11-13**
 (device properties `0x0a`/`0x0b`, option `07` sub-options `0x01`–`0x05`).
+Reset modes 3 and 9 enabled on **2026-11-20** after re-checking the Wireshark
+`pn_dcp_BlockQualifier` value table and p-net `pf_cmina_set_default_cfg`
+(see below).
 
 ## Packet library
 
@@ -128,12 +131,15 @@ therefore not transmitted or not interpreted:
 
 - The actual LED behaviour after a Signal request (device- and vendor-specific;
   a DCP acknowledgement only proves the request was accepted).
-- The exact set of data erased by RTFS reset modes 8/9 and by legacy `05/05` on
-  a specific device. Modes 1/2/4/8 and `05/05` are transmitted only behind the
-  guarded workflow; mode 9 is refused by the encoder.
+- The exact set of data erased by RTFS reset modes 3/8/9 and by legacy `05/05`
+  on a specific device. All six named modes and `05/05` are transmitted only
+  behind the guarded workflow. Wireshark only *names* the modes; p-net's
+  `pf_cmina_set_default_cfg` resets application data for
+  `reset_mode == 1 || reset_mode >= 3` and communication data for
+  `reset_mode == 2 || reset_mode >= 3`, so modes 3 and 9 are full-reset
+  variants there. Other stacks may differ.
 - Legacy `05/05` qualifier values other than `0x0000`: Wireshark marks them
   "reserved" and p-net ignores the field, so no other value is transmitted.
-- Engineering-mode reset `0x0003`. Not transmitted.
 - Device role `0x08` PN-Supervisor (Wireshark only).
 - Full IP suite DNS field semantics.
 - DHCP sub-option behavior.

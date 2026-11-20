@@ -248,8 +248,10 @@ Additional DCP capabilities:
 - DCP Signal (`05/03`, SignalValue `0x0100`) as a plain identification
   action: one unicast frame, rate-limited, never retried, no confirmation.
 - Legacy FactoryReset (`05/05`, BlockQualifier `0x0000`, full reset, no mode
-  field) behind the same guarded path as ResetToFactorySettings modes 1/2/4/8.
-  Modes 3 and 9 remain refused because their semantics are unverified.
+  field) behind the same guarded path as ResetToFactorySettings modes
+  1/2/3/4/8/9. The qualifier table is verified by Wireshark and p-net; the
+  erased scope remains device-specific (p-net resets application and
+  communication data for every mode ≥ 3).
 
 Diagnostics, capture and reporting:
 - Bounded passive capture with DCP filtering, decoded blocks, hex inspection,

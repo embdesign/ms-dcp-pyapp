@@ -20,9 +20,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   advertise the same NameOfStation or IPv4 parameter, and the new read-only test
   `protocol.address_conflicts` fails the run when it is present.
 - **Bounded post-reset re-check.** The read-only post-check polls the target
-  Identify inside a cancellable window (default 10 s) instead of a single
+  Identify inside a cancellable window (default 40 s, configurable) instead of a
+  single
   attempt, and falls back to an unfiltered multicast Identify for the same MAC
   when the reset cleared the station name.
+- **Device inventory and plan comparison.** `dcp-cli inventory` and the Discovery
+  tab export an as-found CSV and compare it with a plan CSV
+  (`mac`/`name_of_station`/`ip_address`/`subnet_mask`/`gateway`, aliases
+  accepted). Findings are `missing_device`, `unexpected_device`,
+  `ambiguous_match` and per-field mismatches; `--strict` exits 1 on findings.
+  Pure helpers live in `inventory.py`.
+- **Device-table filtering.** The Discovery tab has a client-side search box,
+  an "only uncommissioned" view and column sorting. The NameOfStation filter
+  that shapes the Identify request is unchanged.
+- **Configurable post-check window.** `AppConfig.post_check_window_s`, a Reset-tab
+  spin box and `--post-check-window SECONDS` replace the hard-coded value.
 
 ### Changed
 

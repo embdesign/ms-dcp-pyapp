@@ -308,6 +308,8 @@ class DeviceTabMixin:
     def _populate_device_table(self) -> None:
         selected_mac = self.selected_device.mac if self.selected_device else None
         devices = self._devices_for_current_interface()
+        # Filling while sorting is enabled re-orders rows under the insert.
+        self.device_table.setSortingEnabled(False)
         self.device_table.setRowCount(0)
         for device in devices:
             row = self.device_table.rowCount()
@@ -341,21 +343,25 @@ class DeviceTabMixin:
                     column,
                     _item(str(text), mono=mono, data=device if column == 0 else None),
                 )
-        self.device_count_label.setText(
-            f"{len(devices)} device(s) known on this interface · "
-            f"{len(self.latest_discovery.devices) if self.latest_discovery else 0} "
-            "in latest run"
-        )
+        self.device_table.setSortingEnabled(True)
         if devices:
             target_row = 0
             if selected_mac:
-                for row, device in enumerate(devices):
-                    if device.mac == selected_mac:
+                for row in range(self.device_table.rowCount()):
+                    item = self.device_table.item(row, 0)
+                    candidate = (
+                        item.data(Qt.ItemDataRole.UserRole) if item else None
+                    )
+                    if (
+                        isinstance(candidate, DeviceIdentity)
+                        and candidate.mac == selected_mac
+                    ):
                         target_row = row
                         break
             self.device_table.selectRow(target_row)
         else:
             self._show_device(None)
+        self._apply_device_filter()
 
     # ----------------------------------------------------------- device view
     def _on_device_selected(self) -> None:

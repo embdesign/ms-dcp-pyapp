@@ -111,6 +111,8 @@ acknowledgement is not proof of completion.
 | PCAP roundtrip | ✅ | Offline |
 | Station-name/IP validation | ✅ | Offline |
 | Set/Reset tests | ✅ | Part of the device validation and full validation suites; a declared device under test, one frame per operation, read-back and a bounded polling post-check after a reset |
+| Inventory export and plan comparison | ✅ | `dcp-cli inventory --csv` and the Discovery tab write an as-found CSV (MAC, name, IP suite, IDs, role, options, interface, last seen); `--plan` / **Compare plan (CSV)…** compares it by MAC or exact NameOfStation and reports missing, unexpected, ambiguous and field mismatches. Read-only |
+| Device-table search and uncommissioned filter | ✅ | Client-side only; the wire-level NameOfStation filter is separate |
 | Grouped test catalogue and read-only suites | ✅ | Categories from `TEST_GROUPS`; the device read-only and tool self-test suites never contain a state-changing test |
 
 ### 5.1 Operator surfaces
@@ -118,7 +120,7 @@ acknowledgement is not proof of completion.
 | Surface | Status | Notes |
 |---|---|---|
 | Desktop GUI (`dcp-studio`) | ✅ | Eight tabs, worker threads, confirmation dialog |
-| Headless CLI (`dcp-cli`, `python -m dcpstudio COMMAND`) | ✅ | Same services, codec, operations catalogue and safety gate as the GUI. `interfaces`/`discover`/`monitor`/`get`/`pcap`, `signal`, `set-name`/`set-ip`/`reset` with `--confirm`, and `tests` (write cases with `--include-writes --confirm --mac`), JSON output and JSON/HTML reports. No batch or broadcast path |
+| Headless CLI (`dcp-cli`, `python -m dcpstudio COMMAND`) | ✅ | Same services, codec, operations catalogue and safety gate as the GUI. `interfaces`/`discover`/`inventory`/`monitor`/`get`/`pcap`, `signal`, `set-name`/`set-ip`/`reset` with `--confirm`, and `tests` (write cases with `--include-writes --confirm --mac`), JSON output and JSON/HTML reports. No batch or broadcast path |
 
 ## 6. Out of scope
 

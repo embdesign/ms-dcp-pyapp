@@ -299,3 +299,54 @@ def test_pcap_analysis_decodes_fixture(tmp_path, capsys):
     assert len(output) == 1
     assert output[0]["frame"]["kind"] == "dcp"
     assert output[0]["frame"]["xid"] == 0x11223344
+
+
+def test_inventory_exports_a_csv_of_the_discovered_devices(tmp_path, capsys):
+    csv_path = tmp_path / "inventory.csv"
+    code = cli.main(["inventory", *FAST, "--csv", str(csv_path), "--json"])
+    output = _json(capsys)
+    assert code == cli.EXIT_OK
+    assert len(output["devices"]) == 3
+    assert output["csv_path"] == str(csv_path)
+    assert output["plan"] is None
+    text = csv_path.read_text(encoding="utf-8")
+    assert text.splitlines()[0].startswith("mac,name_of_station")
+    assert "line-01.conveyor" in text
+
+
+def test_inventory_plan_check_passes_for_a_matching_plan(tmp_path, capsys):
+    plan = tmp_path / "plan.csv"
+    plan.write_text(
+        "mac,name,ip\n"
+        "02:00:00:00:00:11,line-01.conveyor,192.0.2.11\n"
+        "02:00:00:00:00:12,line-01.robot,192.0.2.12\n"
+        "02:00:00:00:00:13,,\n",
+        encoding="utf-8",
+    )
+    code = cli.main(
+        ["inventory", *FAST, "--plan", str(plan), "--strict", "--json"]
+    )
+    output = _json(capsys)
+    assert code == cli.EXIT_OK
+    assert output["plan"]["findings"] == []
+
+
+def test_inventory_plan_check_reports_findings_and_strict_exit(tmp_path, capsys):
+    plan = tmp_path / "plan.csv"
+    plan.write_text(
+        "mac,name,ip\n02:00:00:00:00:11,line-99.wrong,192.0.2.99\n",
+        encoding="utf-8",
+    )
+    code = cli.main(
+        ["inventory", *FAST, "--plan", str(plan), "--strict", "--json"]
+    )
+    output = _json(capsys)
+    assert code == cli.EXIT_FAILED
+    kinds = [finding["kind"] for finding in output["plan"]["findings"]]
+    assert "name_mismatch" in kinds
+    assert "ip_mismatch" in kinds
+    assert kinds.count("unexpected_device") == 2
+
+    without_strict = cli.main(["inventory", *FAST, "--plan", str(plan), "--json"])
+    _json(capsys)
+    assert without_strict == cli.EXIT_OK

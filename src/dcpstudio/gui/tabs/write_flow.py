@@ -503,6 +503,7 @@ class WriteFlowMixin:
             self.latest_reset_result,
             max(0.5, float(self.timeout_spin.value())),
             self.post_check_cancel,
+            window_s=float(self.post_check_window_spin.value()),
             parent=self,
         )
         worker.finished_ok.connect(self._on_post_check_finished)
@@ -511,7 +512,7 @@ class WriteFlowMixin:
         worker.finished.connect(self._on_post_check_thread_finished)
         self.post_check_worker = worker
         self.reset_post_check_label.setText(
-            "Post-check: sending one read-only unicast Identify…"
+            "Post-check: polling a read-only Identify…"
         )
         self.event_log.info(
             "reset.post_check_start",

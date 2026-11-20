@@ -162,9 +162,10 @@ flowchart TB
 | `services/signal.py` | DCP Signal (`05/03`): one unicast frame, rate-limited, never retried; result `acknowledged` with `verification="not_attempted"`. Never routed through `WriteService` |
 | `testrunner/runner.py` | Run orchestration, service wiring, result helpers and the ID→handler dispatch; the handlers themselves live in `testrunner/handlers/` |
 | `testrunner/handlers/` | One mixin per ID namespace (`env`, `parser`, `protocol`, `validation`, `write`); `TestRunner` inherits them, so `getattr(self, f"_test_{id}")` still resolves the handler |
-| `testrunner/cases.py` | `TestCase` and the 20-entry `TEST_CASES` catalogue (functional ID namespace: `env.*`, `parser.*`, `protocol.*`, `validation.*`, `write.*`) |
+| `testrunner/cases.py` | `TestCase` and the 22-entry `TEST_CASES` catalogue (functional ID namespace: `env.*`, `parser.*`, `protocol.*`, `validation.*`, `write.*`) |
 | `pcap_io.py` | Timestamp-preserving classic PCAP write/read |
 | `reporting.py` | JSON and escaped HTML reports with limitations/warnings |
+| `inventory.py` | Pure as-found CSV inventory, device-table filter predicate and plan-CSV comparison (missing/unexpected/ambiguous/field mismatches) |
 | `config.py` | Non-sensitive UI preferences only |
 | `logging_setup.py` | Thread-safe structured event log |
 | `safety.py` | Per-operation confirmation, safe-maintenance and target-revalidation rules |
@@ -281,6 +282,13 @@ Post-phase consolidation (also complete):
   identity change detection. Read-only; each cycle is one normal Identify
   transaction and the loop is stopped explicitly.
 - DCP Signal (`05/03`) as a plain, single-frame identification action.
+- Revalidation fallback to one NameOfStation-filtered multicast Identify for a
+  target that ignores unicast, bounded polling post-check after a reset, and
+  duplicate NameOfStation/IP warnings plus the `protocol.address_conflicts`
+  read-only test.
+- Inventory workflow: as-found CSV export and plan comparison (`dcp-cli
+  inventory`, Discovery-tab buttons), and client-side device-table
+  search/uncommissioned filter/sorting.
 - Report JSON schema v2 (metadata = application/version only).
 - Ruff lint gate with explicit rule selection; `uv run ruff check src tests tools` clean.
 - Session state moved out of the window into `gui/controller.py`
@@ -324,7 +332,7 @@ procedure.
   unknown.
 - Reset acknowledgement is not proof of completion. The post-check proves only
   that the device answered at the same MAC; it polls one read-only Identify
-  inside a bounded, cancellable window (default 10 s) because a reset may
+  inside a bounded, cancellable window (default 40 s, configurable) because a reset may
   reboot the device. Erased scope and reboot timing are
   vendor-dependent. There is no automatic retry or rollback.
 - Target revalidation uses a fresh read-only Identify: unicast first, then one

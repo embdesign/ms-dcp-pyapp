@@ -342,3 +342,66 @@ def test_group_header_toggles_children_and_child_change_is_partial():
     finally:
         window.close()
         app.processEvents()
+
+
+def _visible_device_rows(window: MainWindow) -> list[object]:
+    rows = []
+    for row in range(window.device_table.rowCount()):
+        if window.device_table.isRowHidden(row):
+            continue
+        item = window.device_table.item(row, 0)
+        rows.append(item.data(Qt.ItemDataRole.UserRole) if item else None)
+    return rows
+
+
+def test_device_search_filter_and_uncommissioned_view():
+    app = _app()
+    window, app = _window_with_discovery()
+    try:
+        window.device_search_edit.setText("robot")
+        app.processEvents()
+        visible = _visible_device_rows(window)
+        assert len(visible) == 1
+        assert visible[0].name_of_station == "line-01.robot"
+        assert "1 of 3 shown" in window.device_count_label.text()
+
+        window.device_search_edit.clear()
+        window.uncommissioned_check.setChecked(True)
+        app.processEvents()
+        visible = _visible_device_rows(window)
+        assert len(visible) == 1
+        assert not visible[0].name_of_station
+
+        window.uncommissioned_check.setChecked(False)
+        app.processEvents()
+        assert len(_visible_device_rows(window)) == 3
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_inventory_export_writes_the_discovered_devices(monkeypatch, tmp_path):
+    from dcpstudio.gui.tabs import discovery as discovery_module
+
+    app = _app()
+    window, app = _window_with_discovery()
+    target = tmp_path / "inventory.csv"
+    monkeypatch.setattr(
+        discovery_module.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *args, **kwargs: (str(target), "CSV files (*.csv)")),
+    )
+    monkeypatch.setattr(
+        discovery_module.QMessageBox,
+        "information",
+        staticmethod(lambda *args, **kwargs: None),
+    )
+    try:
+        window._export_inventory()
+    finally:
+        window.close()
+        app.processEvents()
+    text = target.read_text(encoding="utf-8")
+    assert text.splitlines()[0].startswith("mac,name_of_station")
+    assert "line-01.conveyor" in text
+    assert "line-01.robot" in text

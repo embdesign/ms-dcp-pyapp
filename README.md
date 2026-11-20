@@ -173,6 +173,7 @@ mock interface, which is also the default.
 uv run dcp-cli interfaces
 uv run dcp-cli interfaces --readiness
 uv run dcp-cli discover -i demo --timeout 2
+uv run dcp-cli inventory -i demo --csv inventory.csv --plan plan.csv --strict
 uv run dcp-cli monitor -i demo --interval 5 --cycles 3
 uv run dcp-cli get -i demo --mac 02:00:00:00:00:11 --preset identity
 uv run dcp-cli signal -i demo --mac 02:00:00:00:00:11
@@ -181,8 +182,12 @@ uv run dcp-cli tests -i demo --select parser.fixture_decode
 uv run dcp-cli pcap capture.pcap --dcp-only
 ```
 
-Read-only commands (`interfaces`, `discover`, `monitor`, `get`, `pcap`) never
-change equipment. `signal` is the identification action: one unicast frame,
+Read-only commands (`interfaces`, `discover`, `inventory`, `monitor`, `get`,
+`pcap`) never
+change equipment. `inventory` writes an as-found CSV (MAC, name, IP suite,
+IDs, role, options, interface, last seen) and can compare it with a plan CSV
+(`mac`, `name_of_station`, `ip_address`, `subnet_mask`, `gateway`; aliases such
+as `name`/`ip` accepted). `--strict` turns any plan finding into exit code 1. `signal` is the identification action: one unicast frame,
 rate-limited, never retried. `set-name`, `set-ip` and `reset` require **one**
 `--confirm` flag that covers authorization and the safe-maintenance state:
 
@@ -216,7 +221,7 @@ or refusal, and `2` inconclusive/outcome unknown (no matching response).
 
 | Tab | Current behaviour |
 |---|---|
-| **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, optional NameOfStation filter, Identify discovery, device table, and duplicate NameOfStation/IP warnings |
+| **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, optional NameOfStation filter, Identify discovery, device table with client-side search/uncommissioned filter and sorting, duplicate NameOfStation/IP warnings, inventory CSV export and plan-CSV comparison |
 | **Monitor** | Repeated read-only Identify at a configurable interval with added/removed/changed-device detection (NameOfStation, IP, role, IDs, alias, options) |
 | **Device Details** | Identity summary, per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets, and **Signal device (flash LED)** — one plain `05/03` frame |
 | **Configuration** | NameOfStation and IPv4 Set operations with temporary/permanent qualifier, validation, per-operation confirmation, fresh target revalidation, and read-back verification |
@@ -266,6 +271,8 @@ The suite covers:
 - discovery dedupe, NameOfStation-filtered discovery, wrong-Xid/unrelated
   responses, late responses, timeouts, cancellation, rate limiting;
 - duplicate NameOfStation/IP detection (`protocol.address_conflicts`);
+- inventory CSV export and plan comparison (MAC/name/IP suite, exact match,
+  missing/unexpected/ambiguous findings);
 - unicast Identify and before/after identity comparison (mock);
 - live read-only Get, offline Get request/response decode, and all documented
   block errors;
@@ -310,6 +317,7 @@ src/dcpstudio/
   testrunner/           test catalogue (cases.py), runner engine and handlers/
   pcap_io.py            classic Ethernet PCAP reader/writer
   reporting.py          JSON and escaped HTML reports
+  inventory.py          as-found CSV inventory and plan comparison (pure)
   safety.py             per-operation confirmation and authorization guard
   mock.py               offline mock devices; simulates Set/Reset in memory
   fixtures.py           synthetic offline frames
@@ -363,6 +371,9 @@ docs/                   protocol, references, lab, troubleshooting, fixtures
   a cycle with no answer is `no_responses`/`outcome_unknown`, not proof that the
   device is absent.
 - Reports are operational evidence, **not** PROFINET conformance certificates.
+- The inventory is an **as-found** snapshot of DCP-visible identity only. It does
+  not prove that a planned IP is free, and a plan comparison cannot see a device
+  that does not answer Identify.
 
 Captures and reports contain sensitive identifiers (MAC, station name, IP,
 vendor/device IDs). Handle them accordingly.

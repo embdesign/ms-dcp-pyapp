@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import threading
+import time
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -24,7 +28,13 @@ from PySide6.QtWidgets import (
 
 from ...html_render import esc
 from ...interfaces import InterfaceInfo
-from ...model import DiscoveryResult
+from ...inventory import (
+    compare_plan,
+    device_matches_filter,
+    inventory_csv,
+    parse_plan_csv,
+)
+from ...model import DeviceIdentity, DiscoveryResult
 from ...services.discovery import DiscoveryConfig
 from ...transport.interfaces import enumerate_interfaces
 from ...validation import validate_station_name
@@ -168,9 +178,43 @@ class DiscoveryTabMixin:
 
         devices_group = QGroupBox("3 · Discovered devices (select exactly one target)")
         devices_layout = QVBoxLayout(devices_group)
+        device_filter_row = QHBoxLayout()
+        self.device_search_edit = QLineEdit()
+        self.device_search_edit.setPlaceholderText("Filter: name, MAC, IP, vendor…")
+        self.device_search_edit.setClearButtonEnabled(True)
+        self.device_search_edit.setToolTip(
+            "Client-side filter of the discovered device table. It changes nothing on "
+            "the wire; use the NameOfStation filter above to filter the Identify request."
+        )
+        self.device_search_edit.textChanged.connect(self._apply_device_filter)
+        self.uncommissioned_check = QCheckBox("Only uncommissioned")
+        self.uncommissioned_check.setToolTip(
+            "Show only devices that advertise no NameOfStation."
+        )
+        self.uncommissioned_check.toggled.connect(self._apply_device_filter)
+        self.export_inventory_button = QPushButton("Export inventory (CSV)…")
+        self.export_inventory_button.setToolTip(
+            "Write one CSV row per discovered device (as found)."
+        )
+        self.export_inventory_button.clicked.connect(self._export_inventory)
+        self.compare_plan_button = QPushButton("Compare plan (CSV)…")
+        self.compare_plan_button.setToolTip(
+            "Compare the discovered devices with a plan CSV and report differences."
+        )
+        self.compare_plan_button.clicked.connect(self._compare_inventory_plan)
+        device_filter_row.addWidget(self.device_search_edit, 1)
+        device_filter_row.addWidget(self.uncommissioned_check)
+        device_filter_row.addWidget(self.export_inventory_button)
+        device_filter_row.addWidget(self.compare_plan_button)
+        devices_layout.addLayout(device_filter_row)
         self.device_table = QTableWidget(0, len(DEVICE_COLUMNS))
         self.device_table.setHorizontalHeaderLabels(list(DEVICE_COLUMNS))
         self._configure_table(self.device_table, single=True)
+        self.device_table.setSortingEnabled(True)
+        # Default view: most recent observation first, as the cache is ordered.
+        self.device_table.horizontalHeader().setSortIndicator(
+            10, Qt.SortOrder.DescendingOrder
+        )
         self.device_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Interactive
         )
@@ -183,7 +227,6 @@ class DiscoveryTabMixin:
         devices_layout.addWidget(self.device_table, 1)
         self.device_count_label = QLabel("0 device(s)")
         devices_layout.addWidget(self.device_count_label)
-
         splitter.addWidget(top)
         splitter.addWidget(devices_group)
         splitter.setSizes([430, 330])
@@ -497,3 +540,109 @@ class DiscoveryTabMixin:
             self.discovery_worker.deleteLater()
         self.discovery_worker = None
         self._update_capture_controls()
+
+    # ------------------------------------------------- device table filtering
+    def _apply_device_filter(self) -> None:
+        """Apply the client-side text/uncommissioned filter to the device table."""
+        query = self.device_search_edit.text()
+        only_uncommissioned = self.uncommissioned_check.isChecked()
+        visible = 0
+        for row in range(self.device_table.rowCount()):
+            item = self.device_table.item(row, 0)
+            device = item.data(Qt.ItemDataRole.UserRole) if item else None
+            show = isinstance(device, DeviceIdentity) and device_matches_filter(
+                device, query, uncommissioned_only=only_uncommissioned
+            )
+            self.device_table.setRowHidden(row, not show)
+            if show:
+                visible += 1
+        total = self.device_table.rowCount()
+        latest = len(self.latest_discovery.devices) if self.latest_discovery else 0
+        self.device_count_label.setText(
+            f"{visible} of {total} shown · {latest} in latest run"
+        )
+
+    # ------------------------------------------------- inventory and planning
+    def _export_inventory(self) -> None:
+        devices = self._devices_for_current_interface()
+        if not devices:
+            QMessageBox.information(
+                self,
+                "No devices",
+                "Run discovery first; there is nothing to export.",
+            )
+            return
+        default_path = Path(self.config.report_directory) / (
+            f"inventory-{time.strftime('%Y%m%d-%H%M%S')}.csv"
+        )
+        path, _selected = QFileDialog.getSaveFileName(
+            self,
+            "Export device inventory",
+            str(default_path),
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(inventory_csv(devices), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.critical(self, "Inventory export failed", str(exc))
+            return
+        self.event_log.info(
+            "inventory.exported",
+            f"Inventory written to {path}",
+            {"path": path, "devices": len(devices)},
+        )
+        QMessageBox.information(
+            self,
+            "Inventory exported",
+            f"{len(devices)} device(s) written to\n{path}",
+        )
+
+    def _compare_inventory_plan(self) -> None:
+        devices = self._devices_for_current_interface()
+        if not devices:
+            QMessageBox.information(
+                self,
+                "No devices",
+                "Run discovery first; there is nothing to compare.",
+            )
+            return
+        path, _selected = QFileDialog.getOpenFileName(
+            self,
+            "Select plan CSV",
+            self.config.report_directory,
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.critical(self, "Could not read plan", str(exc))
+            return
+        entries, warnings = parse_plan_csv(text)
+        findings = compare_plan(devices, entries)
+        for warning in warnings:
+            self.event_log.warning(
+                "inventory.plan_warning", warning, {"path": path}
+            )
+        for finding in findings:
+            self.event_log.warning(
+                "inventory.plan_finding",
+                finding.detail,
+                {**finding.to_dict(), "path": path},
+            )
+        if findings:
+            shown = "\n".join(f"• {finding.detail}" for finding in findings[:20])
+            if len(findings) > 20:
+                shown += f"\n… and {len(findings) - 20} more (see the event log)."
+            QMessageBox.warning(
+                self, f"Plan check: {len(findings)} finding(s)", shown
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Plan check",
+                "No differences between the plan and the discovered devices.",
+            )

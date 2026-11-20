@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -124,12 +125,28 @@ class ResetTabMixin:
         self.reset_post_check_button = QPushButton("Verify target after reset (read-only)")
         self.reset_post_check_button.setEnabled(False)
         self.reset_post_check_button.setToolTip(
-            "Sends one unicast Identify. A response proves reachability only; inspect the "
-            "current name/IP independently."
+            "Polls one read-only Identify for the configured window. A response proves "
+            "reachability only; inspect the current name/IP independently. No write is "
+            "retried."
         )
         self.reset_post_check_button.clicked.connect(self._start_post_check)
+        self.post_check_window_spin = QDoubleSpinBox()
+        self.post_check_window_spin.setRange(0.0, 300.0)
+        self.post_check_window_spin.setSingleStep(5.0)
+        self.post_check_window_spin.setDecimals(0)
+        self.post_check_window_spin.setSuffix(" s")
+        self.post_check_window_spin.setValue(float(self.config.post_check_window_s))
+        self.post_check_window_spin.setToolTip(
+            "How long the read-only post-check keeps polling Identify after an "
+            "acknowledged reset because the device may reboot. 0 = one attempt."
+        )
+        self.post_check_window_spin.valueChanged.connect(
+            self._on_post_check_window_changed
+        )
         controls.addWidget(self.apply_reset_button)
         controls.addWidget(self.cancel_reset_button)
+        controls.addWidget(QLabel("Post-check window"))
+        controls.addWidget(self.post_check_window_spin)
         controls.addWidget(self.reset_post_check_button)
         controls.addStretch(1)
         layout.addLayout(controls)
@@ -185,3 +202,6 @@ class ResetTabMixin:
             f"{esc(meaning)}. "
             f"{esc(scope)} Device support is not guaranteed."
         )
+
+    def _on_post_check_window_changed(self, value: float) -> None:
+        self.config.post_check_window_s = max(0.0, float(value))

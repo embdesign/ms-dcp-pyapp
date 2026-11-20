@@ -42,7 +42,7 @@ config change was made.
   `utils.py`, `services/signal.py`, `testrunner/cases.py`, `gui/app.py`,
   `gui/workers.py`, `gui/confirmation.py`, `gui/presentation.py`, `gui/tabs/`),
   threading, safety table, phase table and limitations.
-- `AGENTS.md` — refreshed verified facts: 277 tests / ~126 s, `cli.py` as a
+- `AGENTS.md` — refreshed verified facts: 297 tests / ~132 s, `cli.py` as a
   consumer of `operations.py`, Signal exposed by the Device Details tab and
   `dcp-cli signal`, `dist/` rebuilt 2026-11-19 (0.1.1).
 - `README.md` — removed historical wording, refreshed the project layout and
@@ -68,6 +68,11 @@ Current capability summary (verified in the tree):
   (reset).
 - Duplicate NameOfStation/IP detection in discovery warnings and in the
   `protocol.address_conflicts` read-only test.
+- As-found inventory CSV export and plan comparison (`dcp-cli inventory`,
+  `inventory.py`, Discovery-tab buttons) plus client-side device-table
+  search/uncommissioned filter/sorting.
+- Configurable, persisted post-check window (`AppConfig.post_check_window_s`,
+  Reset-tab spin box, `--post-check-window`).
 - 22-case functional test catalogue (`env.*`, `parser.*`, `protocol.*`,
   `validation.*`, `write.*`); at most one state-changing test per run.
 - Eight-tab GUI and headless `dcp-cli` (`python -m dcpstudio COMMAND`) over the
@@ -83,7 +88,7 @@ Current capability summary (verified in the tree):
 - The request was documentation-only: `PROMPT.md` and `PLAN.md` had to describe
   the implemented build, and obsolete text had to be removed from `AGENTS.md`,
   `HANDOFF.md`, `PLAN.md` and `README.md`.
-- Facts were re-verified against the tree before writing: 277 tests pass, the
+- Facts were re-verified against the tree before writing: 297 tests pass, the
   ruff gate is clean, PySide6 resolves to 6.12.0 and `dist/` was rebuilt on
   2026-11-19 (version 0.1.1).
 - Historical narrative (resolved review items, old coverage/refactor numbers,
@@ -107,7 +112,7 @@ Constraints a future agent must preserve:
 
 | Check | Command / procedure | Result |
 |---|---|---|
-| Full suite | `QT_QPA_PLATFORM=offscreen uv run pytest` | **PASS** — 277 passed in 126.51 s |
+| Full suite | `QT_QPA_PLATFORM=offscreen uv run pytest` | **PASS** — 297 passed in 131.90 s |
 | Lint gate | `uv run ruff check src tests tools` | **PASS** — all checks passed |
 | Package artifact inspection | `.venv/bin/python -m zipfile -l dist/dcp_studio-0.1.1-py3-none-any.whl` | **PASS** — contains `dcpstudio/cli.py`, `gui/app.py`, `services/signal.py`, `entry_points.txt`. `uv build` was re-run on 2026-11-19 for version 0.1.1. |
 | Sensitive-data review | manual read of all changed documents | **PASS** — lab vendor/model/MAC/IP/station identifiers remain withheld; only the synthetic examples `02:00:00:00:00:11` and `192.168.20.x` appear. |

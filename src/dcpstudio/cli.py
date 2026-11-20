@@ -35,6 +35,13 @@ from .constants import (
     DEFAULT_RESPONSE_DELAY_FACTOR,
     SUPPORTED_RESET_MODES,
 )
+from .inventory import (
+    PlanFinding,
+    compare_plan,
+    inventory_csv,
+    inventory_rows,
+    parse_plan_csv,
+)
 from .logging_setup import EventLogger
 from .model import DeviceIdentity, DiscoveryResult, GetResult, WriteResult, iso_utc
 from .monitor import (
@@ -93,6 +100,7 @@ CLI_COMMANDS = frozenset(
     {
         "interfaces",
         "discover",
+        "inventory",
         "monitor",
         "get",
         "signal",
@@ -535,6 +543,79 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         return _discovery_exit_code(result)
 
 
+def _cmd_inventory(args: argparse.Namespace) -> int:
+    _validate_common(args, discovery=True)
+    if args.name is not None:
+        if not args.name:
+            raise _CliError("The Identify NameOfStation filter must not be empty")
+        report = validate_station_name(args.name)
+        if not report.ok:
+            raise _CliError(f"Invalid Identify NameOfStation filter: {report.summary()}")
+    interface = _resolve_interface(args.interface)
+    with _Session(interface, min_interval_s=args.min_interval) as session:
+        result = session.discovery.discover(
+            DiscoveryConfig(
+                timeout_s=args.timeout,
+                response_delay_factor=args.response_delay_factor,
+                vlan_id=args.vlan,
+                min_request_interval_s=args.min_interval,
+                identify_filter_name=args.name,
+            ),
+            progress=_progress(args),
+        )
+        rows = inventory_rows(result.devices)
+        csv_path: Path | None = Path(args.csv).expanduser() if args.csv else None
+        if csv_path is not None:
+            try:
+                csv_path.parent.mkdir(parents=True, exist_ok=True)
+                csv_path.write_text(inventory_csv(result.devices), encoding="utf-8")
+            except OSError as exc:
+                raise _CliError(f"Could not write inventory CSV: {exc}") from exc
+        plan_findings: list[PlanFinding] = []
+        plan_warnings: list[str] = []
+        if args.plan:
+            try:
+                plan_text = Path(args.plan).expanduser().read_text(encoding="utf-8")
+            except OSError as exc:
+                raise _CliError(f"Could not read plan file: {exc}") from exc
+            entries, plan_warnings = parse_plan_csv(plan_text)
+            plan_findings = compare_plan(result.devices, entries)
+        if args.json:
+            _emit_json(
+                {
+                    "interface": result.interface_id,
+                    "outcome": result.outcome,
+                    "devices": rows,
+                    "csv_path": str(csv_path) if csv_path else None,
+                    "plan": (
+                        {
+                            "findings": [finding.to_dict() for finding in plan_findings],
+                            "warnings": plan_warnings,
+                        }
+                        if args.plan
+                        else None
+                    ),
+                }
+            )
+        else:
+            _print_discovery(result)
+            if csv_path is not None:
+                print(f"Inventory written to {csv_path} ({len(rows)} device(s))")
+            for warning in plan_warnings:
+                print(f"plan warning: {warning}", file=sys.stderr)
+            if args.plan:
+                if plan_findings:
+                    print()
+                    print(f"Plan check: {len(plan_findings)} finding(s)")
+                    for finding in plan_findings:
+                        print(f"  {finding.kind}: {finding.detail}")
+                else:
+                    print("Plan check: no differences.")
+        if args.plan and plan_findings and args.strict:
+            return EXIT_FAILED
+        return _discovery_exit_code(result)
+
+
 def _cmd_monitor(args: argparse.Namespace) -> int:
     _validate_common(args, discovery=True)
     interval = float(args.interval)
@@ -747,7 +828,7 @@ def _run_guarded(
             session.writer.post_check(
                 result,
                 timeout_s=float(args.timeout),
-                recheck_window_s=DEFAULT_POST_CHECK_WINDOW_S,
+                recheck_window_s=max(0.0, float(getattr(args, "post_check_window", 0.0))),
                 progress=_progress(args),
             )
         _maybe_write_report(args, session, write_result=result)
@@ -1045,6 +1126,17 @@ def _add_guard_arguments(parser: argparse.ArgumentParser) -> None:
             "in a safe maintenance state (required)"
         ),
     )
+    parser.add_argument(
+        "--post-check-window",
+        type=float,
+        default=DEFAULT_POST_CHECK_WINDOW_S,
+        metavar="SECONDS",
+        help=(
+            "After an acknowledged reset, keep polling the read-only post-check "
+            "Identify for this long before reporting no response "
+            f"(default: {DEFAULT_POST_CHECK_WINDOW_S:.0f} s)"
+        ),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1084,6 +1176,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter by exact NameOfStation (case-sensitive; one 02/02 block)",
     )
     discover.set_defaults(handler=_cmd_discover)
+
+    inventory = subparsers.add_parser(
+        "inventory",
+        help=(
+            "Discover devices and export an inventory CSV; optionally compare a plan "
+            "(read-only)"
+        ),
+    )
+    _add_interface_arguments(inventory, timeout=3.0)
+    inventory.add_argument(
+        "--name",
+        metavar="NAME",
+        help="Filter by exact NameOfStation (case-sensitive; one 02/02 block)",
+    )
+    inventory.add_argument(
+        "--csv",
+        metavar="PATH",
+        help="Write the discovered devices to this CSV inventory path",
+    )
+    inventory.add_argument(
+        "--plan",
+        metavar="PATH",
+        help=(
+            "Compare against a plan CSV with mac/name_of_station/ip_address/"
+            "subnet_mask/gateway columns"
+        ),
+    )
+    inventory.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit 1 when the plan comparison reports any finding",
+    )
+    inventory.set_defaults(handler=_cmd_inventory)
 
     monitor = subparsers.add_parser(
         "monitor",

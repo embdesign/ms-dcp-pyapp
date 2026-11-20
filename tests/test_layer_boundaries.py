@@ -36,6 +36,7 @@ PURE_MODULES = frozenset(
         "dcpstudio.outcomes",
         "dcpstudio.interfaces",
         "dcpstudio.monitor",
+        "dcpstudio.inventory",
     }
 )
 

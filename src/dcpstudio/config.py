@@ -13,7 +13,11 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
-from .constants import DEFAULT_MIN_REQUEST_INTERVAL_S, DEFAULT_RESPONSE_DELAY_FACTOR
+from .constants import (
+    DEFAULT_MIN_REQUEST_INTERVAL_S,
+    DEFAULT_POST_CHECK_WINDOW_S,
+    DEFAULT_RESPONSE_DELAY_FACTOR,
+)
 from .interfaces import MOCK_INTERFACE_ID
 
 CONFIG_SCHEMA_VERSION = 1
@@ -41,6 +45,7 @@ class AppConfig:
     response_delay_factor: int = DEFAULT_RESPONSE_DELAY_FACTOR
     vlan_id: int | None = None
     min_request_interval_s: float = DEFAULT_MIN_REQUEST_INTERVAL_S
+    post_check_window_s: float = DEFAULT_POST_CHECK_WINDOW_S
     max_capture_frames: int = 4000
     report_directory: str = str(default_report_directory())
     show_dcp_only: bool = True

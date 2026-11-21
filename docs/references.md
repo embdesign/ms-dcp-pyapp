@@ -57,6 +57,13 @@ Key verified statements:
   This tool always sends BlockQualifier `0x0000` ("Default") for it.
 - A single Set block is processed directly; p-net does not require a
   Control/Start-Transaction or Control/End-Transaction wrapper for it.
+- **Identify-All BlockLength ambiguity (recorded 2026-11-21):** the p-net
+  source comment writes `DCP-IdentifyAll-ReqPDU = ... DCPBlockLength (=0x02)`,
+  but its parser accepts both `0x02` and `0x00` ("the PNIO tester sends
+  src_block_len == 0"). Wireshark's block loop only consumes the 4-byte block
+  header for `FF/FF`, which implies a zero-length value. This project sends
+  `ff ff 00 00` (`DCPDataLength == 4`) and the lab device answered it. Both
+  forms are tolerated when parsing.
 - Identify response MAC is the Ethernet source; p-net omits an IP/MAC block in
   Identify responses.
 - Response delay = `((mac[4] * 256 + mac[5]) % factor) * 10 ms`, factor 1…6400.
@@ -80,6 +87,16 @@ Implements **IEC 61158-6-10 section 4.3**. Used for:
 - Block errors `0x00`–`0x07`.
 - Control sub-options `01` Start, `02` End, `03` Signal, `04` Response,
   `05` Reset Factory Settings (legacy), `06` Reset to Factory.
+- **Full IP suite `01/03` value layout**: IPv4 address, subnet mask, standard
+  gateway followed by four DNS server IPv4 addresses (28 bytes total); the
+  BlockQualifier is decoded with the same temporary/permanent table as `01/02`.
+- **DHCP control `03/ff`** (sub-option 255, "Control DHCP for address
+  resolution"): value = option code (255), parameter length (1), control
+  parameter data with `0x00` "Don't use DHCP (Default)", `0x01` "Don't use DHCP,
+  all DHCPOptions set to Reset to Factory value", `0x02` "Use DHCP with the given
+  set of DHCPOptions". The DHCP option codes themselves
+  (12/43/54/55/60/61/81/97) are the RFC 2132 / RFC 4702 codes, named by the same
+  dissector.
 - Legacy `05/05` is dissected as a 2-byte BlockQualifier where `0x0000` reads
   "Default" and any other value reads "reserved".
 - Signal decoding expects BlockQualifier + a 16-bit SignalValue (`0x0100`
@@ -102,14 +119,19 @@ Implements **IEC 61158-6-10 section 4.3**. Used for:
 
 These are **named** in this project but their bit fields are not interpreted:
 the block value is preserved and displayed as hex, like every other block
-whose value is only partially characterised (`02/05`, `01/03`, DHCP).
+whose value is only partially characterised (`02/05`, the DHCP option codes
+other than the control value).
 
 p-net does **not** corroborate the `07` and `0x0a`/`0x0b` values: its
 `pf_dcp.h` (mirror `Oseryx/p-net`, `src/common/pf_dcp.h`) leaves option
 `0x07`–`0x7f` reserved and defines no device-property sub-option above `0x08`.
 The naming therefore rests on the Wireshark dissector alone (which implements
 IEC 61158-6-10 §4.3) and is marked as such rather than presented as
-p-net-verified.
+p-net-verified. The same applies to the Full IP suite and DHCP control
+layouts: p-net rejects DHCP Set (`PF_DCP_OPT_DHCP` →
+`PF_DCP_BLOCK_ERROR_OPTION_NOT_SUPPORTED`) and leaves the DNS fields
+unvalidated (`TODO validate DNS addresses`), so those two layouts rest on the
+Wireshark dissection and, for the option codes, RFC 2132.
 
 ### PROFINET specification citations
 
@@ -141,8 +163,11 @@ therefore not transmitted or not interpreted:
 - Legacy `05/05` qualifier values other than `0x0000`: Wireshark marks them
   "reserved" and p-net ignores the field, so no other value is transmitted.
 - Device role `0x08` PN-Supervisor (Wireshark only).
-- Full IP suite DNS field semantics.
-- DHCP sub-option behavior.
+- How a specific device uses the DNS values of a Full IP suite, and how it
+  handles the DHCP control (lease timing, which options it resets). The value
+  layout is verified; device behaviour is not.
+- The DHCP option codes that are not the control value: they are decoded as
+  named sub-options but never assigned by this tool.
 - Vendor-specific unlock/commissioning requirements.
 
 ## UI framework

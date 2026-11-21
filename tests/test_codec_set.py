@@ -6,7 +6,9 @@ from dcpstudio.codec import (
     DcpEncodingError,
     build_factory_reset_legacy_request,
     build_reset_to_factory_request,
+    build_set_dhcp_request,
     build_set_ip_request,
+    build_set_ip_suite_request,
     build_set_name_request,
     build_signal_request,
     parse_frame,
@@ -160,6 +162,50 @@ def test_reset_modes_cover_the_full_wireshark_table():
     for reserved in (0, 5, 6, 7, 10):
         with pytest.raises(DcpEncodingError):
             build_reset_to_factory_request(SRC, DST, XID, reserved)
+
+
+def test_full_ip_suite_request_has_the_28_byte_value():
+    raw = build_set_ip_suite_request(
+        SRC,
+        DST,
+        XID,
+        "192.168.1.10",
+        "255.255.255.0",
+        "192.168.1.1",
+        dns_servers=("192.168.1.53",),
+        permanent=True,
+    )
+    block = parse_frame(raw).blocks[0]
+    assert (block.option, block.suboption) == (0x01, 0x03)
+    assert block.block_qualifier == 0x0001
+    assert len(block.value) == 28
+    assert block.value[0:4] == bytes([192, 168, 1, 10])
+    assert block.value[12:16] == bytes([192, 168, 1, 53])
+    assert block.value[16:28] == b"\x00" * 12
+    assert request_qualifier("set_ip_suite", permanent=False) == 0x0000
+    with pytest.raises(DcpEncodingError):
+        build_set_ip_suite_request(
+            SRC,
+            DST,
+            XID,
+            "192.168.1.10",
+            "255.255.255.0",
+            "192.168.1.1",
+            dns_servers=("1.1.1.1", "1.1.1.2", "1.1.1.3", "1.1.1.4", "1.1.1.5"),
+            permanent=True,
+        )
+
+
+def test_dhcp_control_request_layout():
+    raw = build_set_dhcp_request(SRC, DST, XID, 2)
+    block = parse_frame(raw).blocks[0]
+    assert (block.option, block.suboption) == (0x03, 0xFF)
+    assert block.block_qualifier == 0x0000
+    assert block.value == bytes([0xFF, 0x01, 0x02])
+    assert request_qualifier("set_dhcp") == 0x0000
+    for control in (3, 255):
+        with pytest.raises(DcpEncodingError):
+            build_set_dhcp_request(SRC, DST, XID, control)
 
 
 def test_signal_request_golden_vector():

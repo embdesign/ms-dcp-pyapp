@@ -58,13 +58,18 @@ Option (1) | SubOption (1) | BlockLength (2) | BlockInfo/Qualifier (2) | Value (
 | Set response — Control/Response (`05/04`) | none — value is `[option, suboption, blockError]` |
 | Hello request | BlockInfo |
 
+Destination rules: Hello and Identify-All/filter use the DCP multicast MAC
+`01:0e:cf:00:00:00` (Hello uses `01:0e:cf:00:00:01`); a unicast Identify and
+every Get/Set/Reset target exactly one device MAC. Broadcast and other
+multicast destinations are rejected by the encoders.
+
 ### 3.2 Options and sub-options
 
 | Option | Sub | Meaning | Value |
 |---|---|---|---|
 | `01` | `01` | MAC address | 6 bytes |
 | `01` | `02` | IP parameter | IP(4), mask(4), gateway(4) |
-| `01` | `03` | Full IP suite | IP/mask/gateway + DNS fields (opaque here) |
+| `01` | `03` | Full IP suite | IP(4), mask(4), gateway(4), DNS1–DNS4 (4×4) = 28 bytes |
 | `02` | `01` | Manufacturer / type of station | ASCII, no NUL |
 | `02` | `02` | NameOfStation | ASCII, no NUL; empty = not set; also the Identify NameOfStation filter value |
 | `02` | `03` | Device ID | VendorID(2), DeviceID(2) |
@@ -75,6 +80,7 @@ Option (1) | SubOption (1) | BlockLength (2) | BlockInfo/Qualifier (2) | Value (
 | `02` | `08` | OEM device ID | OEM VendorID(2), OEM DeviceID(2) |
 | `02` | `0a` | RSI properties | 16-bit capability bit field (not interpreted) |
 | `02` | `0b` | Protocol properties | 16-bit capability bit field (not interpreted) |
+| `03` | `ff` | DHCP control for address resolution | option code `0xff`, length `1`, control `0`/`1`/`2` |
 | `05` | `01` | Control/Start | BlockQualifier = global qualifier |
 | `05` | `02` | Control/Stop | must echo Start qualifier |
 | `05` | `03` | Control/Signal | BlockQualifier `0x0000` + SignalValue `0x0100` (flash once) |

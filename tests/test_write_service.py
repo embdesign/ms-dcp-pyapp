@@ -887,6 +887,53 @@ def test_reset_modes_3_and_9_are_guarded_and_acknowledged(mode):
     assert device.name == ""
 
 
+def test_full_ip_suite_is_acknowledged_and_verified():
+    device, transport, _, _, writer, _, target = _setup()
+    try:
+        result = writer.execute(
+            WriteRequest(
+                "set_ip_suite",
+                target.mac,
+                _confirmation(target, "set_ip_suite"),
+                _auth(),
+                _config(),
+                ip_address="192.0.2.77",
+                subnet_mask="255.255.255.0",
+                gateway="192.0.2.1",
+                dns_servers=("192.0.2.53",),
+                permanent=True,
+            )
+        )
+    finally:
+        transport.close()
+    assert result.state == "acknowledged"
+    assert result.verification == "verified"
+    assert result.block_qualifier == 0x0001
+    assert device.ip == "192.0.2.77"
+    assert device.dns == ["192.0.2.53"]
+
+
+def test_dhcp_control_is_acknowledged_and_verified():
+    device, transport, _, _, writer, _, target = _setup()
+    try:
+        result = writer.execute(
+            WriteRequest(
+                "set_dhcp",
+                target.mac,
+                _confirmation(target, "set_dhcp"),
+                _auth(),
+                _config(),
+                dhcp_control=2,
+            )
+        )
+    finally:
+        transport.close()
+    assert result.state == "acknowledged"
+    assert result.verification == "verified"
+    assert result.block_qualifier == 0x0000
+    assert device.dhcp_control == 2
+
+
 def test_post_check_polls_within_the_recheck_window():
     device = default_mock_devices()[0]
     transport, writer, target = _setup_with_network(MockNetwork([device]))

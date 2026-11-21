@@ -99,6 +99,25 @@ class IpSubOption(IntEnum):
     FULL_IP_SUITE = 0x03
 
 
+class DhcpSubOption(IntEnum):
+    """DHCP sub-options named by the Wireshark pn_dcp dissector.
+
+    Values 12/43/54/55/60/61/81/97 are the DHCP option codes of RFC 2132 and
+    RFC 4702; 255 is the PROFINET-specific "control DHCP for address
+    resolution" value.
+    """
+
+    HOST_NAME = 12
+    VENDOR_SPECIFIC = 43
+    SERVER_IDENTIFIER = 54
+    PARAMETER_REQUEST_LIST = 55
+    CLASS_IDENTIFIER = 60
+    CLIENT_IDENTIFIER = 61
+    FQDN = 81
+    UUID_CLIENT_ID = 97
+    CONTROL_FOR_ADDRESS_RESOLUTION = 255
+
+
 class DeviceSubOption(IntEnum):
     VENDOR = 0x01  # "Type of Station" / manufacturer name
     NAME_OF_STATION = 0x02
@@ -199,6 +218,21 @@ SUPPORTED_RESET_MODES: frozenset[int] = frozenset(
 # Legacy FactoryReset (05/05) *is* implemented and reachable from the Reset tab,
 # the CLI and the test runner: see ``codec.build_factory_reset_legacy_request``
 # and ``LEGACY_FACTORY_RESET_QUALIFIER`` above.
+
+# Full IP suite (01/03) carries the 12-byte IP suite followed by four DNS
+# server IPv4 addresses (Wireshark pn_dcp dissection of the sub-option value).
+FULL_IP_SUITE_DNS_SERVERS = 4
+
+# DHCP control for address resolution (03/ff). Wireshark decodes a 3-byte
+# value: option code 255, parameter length 1, control parameter data.
+DHCP_CONTROL_OFF = 0x00
+DHCP_CONTROL_OFF_RESET_OPTIONS = 0x01
+DHCP_CONTROL_ON = 0x02
+DHCP_CONTROL_TEXT: dict[int, str] = {
+    DHCP_CONTROL_OFF: "Do not use DHCP (default)",
+    DHCP_CONTROL_OFF_RESET_OPTIONS: "Do not use DHCP; reset all DHCP options",
+    DHCP_CONTROL_ON: "Use DHCP for address resolution",
+}
 
 # --------------------------------------------------------------------------
 # Block errors (Control/Response)

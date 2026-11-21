@@ -20,6 +20,7 @@ from .constants import (
     ETHERTYPE_PROFINET,
     ControlSubOption,
     DeviceSubOption,
+    DhcpSubOption,
     FrameId,
     IpSubOption,
     Option,
@@ -56,6 +57,8 @@ class MockDeviceConfig:
     instance: tuple[int, int] | None = None
     oem_device_id: tuple[int, int] | None = None
     ip_block_info: int | None = None
+    dns: list[str] = field(default_factory=list)
+    dhcp_control: int = 0
     initiative: bool = True
 
     def ip_bytes(self) -> bytes:
@@ -76,6 +79,10 @@ class MockDeviceConfig:
 
     def options_bytes(self) -> bytes:
         return b"".join(bytes([int(o) & 0xFF, int(s) & 0xFF]) for o, s in self.device_options)
+
+    def dns_bytes(self) -> bytes:
+        slots = list(self.dns[:4]) + ["0.0.0.0"] * (4 - min(4, len(self.dns)))
+        return b"".join(ipaddress.IPv4Address(server or "0.0.0.0").packed for server in slots)
 
 
 def default_mock_devices() -> list[MockDeviceConfig]:
@@ -284,6 +291,38 @@ class MockNetwork:
                         error = 0x00
                     else:
                         error = 0x03
+            elif option == int(Option.IP) and sub == int(IpSubOption.FULL_IP_SUITE):
+                if len(block.value) != 28:
+                    error = 0x03
+                else:
+                    ip = str(ipaddress.IPv4Address(block.value[0:4]))
+                    mask = str(ipaddress.IPv4Address(block.value[4:8]))
+                    gateway = str(ipaddress.IPv4Address(block.value[8:12]))
+                    dns = [
+                        str(ipaddress.IPv4Address(block.value[offset : offset + 4]))
+                        for offset in (12, 16, 20, 24)
+                    ]
+                    if validate_ip_suite(ip, mask, gateway).ok:
+                        device.ip = ip
+                        device.mask = mask
+                        device.gateway = gateway
+                        device.dns = [server for server in dns if server != "0.0.0.0"]
+                        device.ip_block_info = None
+                        error = 0x00
+                    else:
+                        error = 0x03
+            elif option == int(Option.DHCP) and sub == int(
+                DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION
+            ):
+                if (
+                    len(block.value) >= 3
+                    and block.value[0] == int(DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION)
+                    and block.value[2] <= 2
+                ):
+                    device.dhcp_control = int(block.value[2])
+                    error = 0x00
+                else:
+                    error = 0x02
             elif option == int(Option.CONTROL) and sub == int(
                 ControlSubOption.SIGNAL
             ):
@@ -406,6 +445,31 @@ class MockNetwork:
     def _get_block(self, device: MockDeviceConfig, option: int, suboption: int) -> bytes:
         if option == int(Option.IP) and suboption == int(IpSubOption.MAC):
             return encode_block(option, suboption, block_info=0, value=_mac_bytes(device.mac))
+        if option == int(Option.IP) and suboption == int(IpSubOption.FULL_IP_SUITE):
+            return encode_block(
+                option,
+                suboption,
+                block_info=device.computed_ip_info(),
+                value=(
+                    device.ip_bytes()
+                    + device.mask_bytes()
+                    + device.gateway_bytes()
+                    + device.dns_bytes()
+                ),
+            )
+        if option == int(Option.DHCP) and suboption == int(
+            DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION
+        ):
+            return encode_block(
+                option,
+                suboption,
+                block_info=0,
+                value=bytes([
+                    int(DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION),
+                    1,
+                    device.dhcp_control,
+                ]),
+            )
         if option == int(Option.IP) and suboption == int(IpSubOption.IP_PARAMETER):
             return encode_block(
                 option,

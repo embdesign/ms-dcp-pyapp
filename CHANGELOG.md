@@ -10,6 +10,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **DNS and DHCP state in the read-only views.** Device Details, the device JSON
+  and the HTML report now show the DNS servers of an `01/03` block and the DHCP
+  control of an `03/ff` block. A new `network` Get preset (`dcp-cli get
+  --selector 1/3 --selector 3/255`) reads both, and the diagnostics preset
+  includes them.
+- **Set Full IP suite (`01/03`) and DHCP control (`03/ff`).** The Configuration
+  tab and `dcp-cli set-ip-suite` set IP/mask/gateway plus up to four DNS servers
+  in one guarded block; `dcp-cli set-dhcp` / the Configuration tab set the DHCP
+  on/off control. Both use the temporary/permanent qualifier where defined,
+  a fresh revalidation, one frame and a read-back Get. The value layouts follow
+  the Wireshark `pn_dcp` dissection (and RFC 2132 for the DHCP option codes),
+  not a device stack that leaves them unimplemented; device support varies.
 - **Reset modes 3 and 9 are transmitted.** `ResetToFactorySettings` now covers
   every mode of the DCP reset table (1, 2, 3, 4, 8, 9), behind the same
   per-operation confirmation, revalidation and post-check. Wireshark defines the
@@ -41,6 +53,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that shapes the Identify request is unchanged.
 - **Configurable post-check window.** `AppConfig.post_check_window_s`, a Reset-tab
   spin box and `--post-check-window SECONDS` replace the hard-coded value.
+
+### Fixed
+
+- **Wire-conformance guards found by the specification audit (2026-11-21).**
+  `build_get_request` now rejects multicast/broadcast destinations (Get is a
+  unicast transaction), and `build_identify_request` accepts only the DCP
+  multicast MAC or a single device MAC. The parser now warns when a Set block
+  is too short to carry its mandatory BlockQualifier and when the reserved
+  header field is non-zero outside Identify requests.
 
 ### Changed
 

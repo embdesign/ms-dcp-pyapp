@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+
+from .constants import FULL_IP_SUITE_DNS_SERVERS
 
 _MAC_RE = re.compile(r"^[0-9a-fA-F]{2}([:-][0-9a-fA-F]{2}){5}$")
 _STATION_LABEL_RE = re.compile(r"^[a-z0-9-]{1,63}$")
@@ -159,6 +162,37 @@ def validate_ip_suite(ip: str, mask: str, gateway: str) -> ValidationReport:
     if gateway and int(gw_obj) != 0:
         if (ip_int & mask_int) != (int(gw_obj) & mask_int):
             report.add_error("Gateway is not in the same subnet as the IP address")
+    return report
+
+
+def validate_dns_servers(values: Sequence[str]) -> ValidationReport:
+    """Validate the DNS server list of a Full IP suite (01/03).
+
+    The wire format has exactly four IPv4 slots (Wireshark pn_dcp). An empty
+    value or ``0.0.0.0`` means "no DNS server"; other addresses must be plain
+    IPv4 literals.
+    """
+    report = ValidationReport()
+    entries = [value.strip() for value in values if value.strip()]
+    if len(entries) > FULL_IP_SUITE_DNS_SERVERS:
+        report.add_error(
+            f"At most {FULL_IP_SUITE_DNS_SERVERS} DNS servers are supported"
+        )
+    seen: set[str] = set()
+    for entry in entries:
+        try:
+            address = ipaddress.IPv4Address(entry)
+        except ValueError:
+            report.add_error(f"Invalid DNS server address {entry!r}")
+            continue
+        if int(address) == 0:
+            continue
+        key = str(address)
+        if key in seen:
+            report.add_warning(f"DNS server {key} is listed more than once")
+        seen.add(key)
+        if int(address) >= int(ipaddress.IPv4Address("224.0.0.0")):
+            report.add_error(f"DNS server {key} must be a unicast IPv4 address")
     return report
 
 

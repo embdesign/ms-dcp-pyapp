@@ -13,7 +13,9 @@ from dcpstudio.operations import (
     confirmation_for,
     legacy_reset_spec,
     reset_mode_spec,
+    set_dhcp_spec,
     set_ip_spec,
+    set_ip_suite_spec,
     set_name_spec,
 )
 
@@ -74,6 +76,26 @@ def test_reset_mode_spec_marks_the_factory_reset_variants():
         factory = reset_mode_spec(mode)
         assert factory.destructiveness == FACTORY_RESET
         assert factory.proposed_parameters["Reset mode"] == str(mode)
+
+
+def test_full_ip_suite_and_dhcp_specs_are_complete():
+    suite = set_ip_suite_spec(
+        "192.0.2.10",
+        "255.255.255.0",
+        "192.0.2.1",
+        ["192.0.2.53"],
+        permanent=True,
+    )
+    assert suite.operation_id == "set_ip_suite"
+    assert suite.proposed_parameters["Option / sub-option"] == "01 / 03"
+    assert suite.proposed_parameters["BlockQualifier"] == "0x0001"
+    assert suite.proposed_parameters["DNS servers"] == "192.0.2.53"
+    assert suite.consequences
+    dhcp = set_dhcp_spec(2)
+    assert dhcp.operation_id == "set_dhcp"
+    assert dhcp.proposed_parameters["Option / sub-option"] == "03 / ff"
+    assert dhcp.proposed_parameters["Control value"] == "2"
+    assert dhcp.destructiveness == STATE_CHANGING
 
 
 def test_legacy_reset_spec_has_no_mode_field():

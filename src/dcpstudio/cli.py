@@ -33,6 +33,9 @@ from .constants import (
     DEFAULT_MIN_REQUEST_INTERVAL_S,
     DEFAULT_POST_CHECK_WINDOW_S,
     DEFAULT_RESPONSE_DELAY_FACTOR,
+    DHCP_CONTROL_OFF,
+    DHCP_CONTROL_OFF_RESET_OPTIONS,
+    DHCP_CONTROL_ON,
     SUPPORTED_RESET_MODES,
 )
 from .inventory import (
@@ -56,7 +59,9 @@ from .operations import (
     confirmation_for,
     legacy_reset_spec,
     reset_mode_spec,
+    set_dhcp_spec,
     set_ip_spec,
+    set_ip_suite_spec,
     set_name_spec,
 )
 from .pcap_io import PcapError, analyze_pcap
@@ -85,6 +90,7 @@ from .transport.interfaces import (
 )
 from .validation import (
     validate_discovery_timeout,
+    validate_dns_servers,
     validate_ip_suite,
     validate_mac,
     validate_response_delay_factor,
@@ -881,6 +887,54 @@ def _cmd_set_ip(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_set_ip_suite(args: argparse.Namespace) -> int:
+    _validate_common(args, discovery=False)
+    mac = _validated_mac(args.mac)
+    report = validate_ip_suite(args.ip, args.mask, args.gateway)
+    dns_report = validate_dns_servers(args.dns)
+    report.errors.extend(dns_report.errors)
+    report.warnings.extend(dns_report.warnings)
+    if not report.ok:
+        raise _CliError(f"Invalid full IP suite: {report.summary()}")
+    permanent = args.persistence == "permanent"
+    return _run_guarded(
+        args,
+        spec=set_ip_suite_spec(
+            args.ip,
+            args.mask,
+            args.gateway,
+            args.dns,
+            permanent=permanent,
+        ),
+        kind="set_ip_suite",
+        target_mac=mac,
+        parameters={
+            "ip_address": args.ip,
+            "subnet_mask": args.mask,
+            "gateway": args.gateway,
+            "dns_servers": tuple(args.dns),
+            "permanent": permanent,
+        },
+    )
+
+
+def _cmd_set_dhcp(args: argparse.Namespace) -> int:
+    _validate_common(args, discovery=False)
+    mac = _validated_mac(args.mac)
+    control = {
+        "off": DHCP_CONTROL_OFF,
+        "reset": DHCP_CONTROL_OFF_RESET_OPTIONS,
+        "on": DHCP_CONTROL_ON,
+    }[args.dhcp]
+    return _run_guarded(
+        args,
+        spec=set_dhcp_spec(control),
+        kind="set_dhcp",
+        target_mac=mac,
+        parameters={"dhcp_control": control},
+    )
+
+
 def _cmd_reset(args: argparse.Namespace) -> int:
     _validate_common(args, discovery=False)
     mac = _validated_mac(args.mac)
@@ -1291,6 +1345,57 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_guard_arguments(set_ip)
     set_ip.set_defaults(handler=_cmd_set_ip)
+
+    set_ip_suite = subparsers.add_parser(
+        "set-ip-suite",
+        help="Set IP/mask/gateway plus up to four DNS servers (01/03, --confirm)",
+    )
+    _add_interface_arguments(set_ip_suite, timeout=2.0)
+    set_ip_suite.add_argument(
+        "--mac", required=True, metavar="MAC", help="Target device MAC"
+    )
+    set_ip_suite.add_argument(
+        "--ip", required=True, metavar="ADDRESS", help="New IPv4 address"
+    )
+    set_ip_suite.add_argument("--mask", required=True, metavar="MASK", help="Subnet mask")
+    set_ip_suite.add_argument(
+        "--gateway",
+        default="0.0.0.0",
+        metavar="ADDRESS",
+        help="Gateway (default: 0.0.0.0)",
+    )
+    set_ip_suite.add_argument(
+        "--dns",
+        action="append",
+        default=[],
+        metavar="ADDRESS",
+        help="DNS server address; may be repeated up to four times",
+    )
+    set_ip_suite.add_argument(
+        "--persistence",
+        choices=("permanent", "temporary"),
+        default="permanent",
+        help="BlockQualifier persistence (default: permanent)",
+    )
+    _add_guard_arguments(set_ip_suite)
+    set_ip_suite.set_defaults(handler=_cmd_set_ip_suite)
+
+    set_dhcp = subparsers.add_parser(
+        "set-dhcp", help="Set DHCP control for address resolution (03/ff, --confirm)"
+    )
+    _add_interface_arguments(set_dhcp, timeout=2.0)
+    set_dhcp.add_argument("--mac", required=True, metavar="MAC", help="Target device MAC")
+    set_dhcp.add_argument(
+        "--dhcp",
+        required=True,
+        choices=("off", "reset", "on"),
+        help=(
+            "off = do not use DHCP; reset = do not use DHCP and reset all DHCP "
+            "options; on = use DHCP"
+        ),
+    )
+    _add_guard_arguments(set_dhcp)
+    set_dhcp.set_defaults(handler=_cmd_set_dhcp)
 
     reset = subparsers.add_parser(
         "reset", help="Reset: RTFS modes 1/2/3/4/8/9 or legacy 05/05 (--confirm)"

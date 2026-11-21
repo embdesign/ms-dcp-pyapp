@@ -20,6 +20,7 @@ Legend:
 |---|---|---|---|---|---|
 | Enumerate interfaces | — | — | — | ✅ | Scapy `conf.ifaces`: name, description, MAC, IPv4/IPv6, flags; Linux sysfs link state |
 | Explicit interface selection | — | — | — | ✅ | Single selection; demo/mock row available |
+| Destination rules | ✅ | ✅ | ✅ | ✅ | Identify is sent to `01:0e:cf:00:00:00` or one device MAC; Get/Set/Reset are unicast only. Broadcast and other multicast destinations are rejected |
 | EtherType `0x8892` handling | ✅ | ✅ | ✅ | ✅ | FrameID discriminates DCP from PROFINET RT |
 | VLAN tag (802.1Q) | ✅ | ✅ | ✅ | ✅ | One tag; stacked tags warned |
 | Identify-All | ✅ | ✅ | ✅ | ✅ | One request per user action; timeout + ResponseDelayFactor |
@@ -39,6 +40,7 @@ Legend:
 | Get one block | ✅ | ✅ | ✅ | ✅ | Read-only; single transaction |
 | Get multiple blocks | ✅ | ✅ | ✅ | ✅ | One transaction; GUI presets and live test |
 | Get IP parameter | ✅ | ✅ | ✅ | ✅ | IP/mask/gateway; BlockInfo bit 0 |
+| Get Full IP suite / DHCP control | ✅ | ✅ | ✅ | ✅ | `01/03` (28-byte value, DNS servers) and `03/ff` (control 0/1/2) decoded into the device view, JSON and HTML report; `network` Get preset |
 | Get NameOfStation | ✅ | ✅ | ✅ | ✅ | Trailing NULs trimmed |
 | Get Device ID / role / options | ✅ | ✅ | ✅ | ✅ | Role bits from Wireshark |
 | Get alias / instance / OEM ID | ✅ | ✅ | ✅ | ✅ | Optional blocks; explicit block errors reported |
@@ -47,12 +49,15 @@ Legend:
 | Control/Response error decode | — | ✅ | — | ✅ | Codes `0x00`–`0x07` |
 | Set NameOfStation | ✅ | ✅ | ✅ | ✅ | `02/02`; per-operation confirmation + fresh revalidation; read-back Get |
 | Set IP parameters | ✅ | ✅ | ✅ | ✅ | `01/02`; 12-byte suite; temp/permanent qualifier; read-back Get |
+| Set Full IP suite | ✅ | ✅ | ✅ | ✅ | `01/03`; 28-byte value (suite + four DNS slots); temp/permanent qualifier; read-back Get |
+| Set DHCP control | ✅ | ✅ | ✅ | ✅ | `03/ff`; 3-byte value; read-back Get |
 | ResetToFactorySettings | ✅ | ✅ | ✅ | ✅ | `05/06`; all modes 1/2/3/4/8/9; per-operation confirmation; post-check |
 
 Get accepts arbitrary `Option/SubOption` selectors through the codec and
 `dcp-cli get --selector OPTION/SUBOPTION` (repeatable); the GUI exposes named
 presets only. There is no arbitrary-Set editor: Set is limited to the
-sub-options listed above.
+sub-options listed above (NameOfStation, `01/02`, `01/03`, DHCP control) plus
+the Control reset/signal operations.
 
 ## 3. Configuration
 
@@ -60,8 +65,8 @@ sub-options listed above.
 |---|---|---|---|---|
 | Set NameOfStation | `02/02` + BlockQualifier `0x0000`/`0x0001` | Temporary/permanent | ✅ | Per-operation confirmation, fresh revalidation, read-back Get; no retry |
 | Set IP parameter | `01/02` + 12-byte suite + qualifier | Temporary/permanent; may drop communication | ✅ | Same safeguards; discovery does not prove the IP is unused |
-| Set Full IP suite | `01/03` | DNS fields | ⛔ | DNS layout not fully verified |
-| Set DHCP parameters | `03/xx` | DHCP control | ➖ | Not implemented |
+| Set Full IP suite | `01/03` | 12-byte suite + four DNS server addresses | ✅ | Guarded Set with temporary/permanent qualifier and a 28-byte read-back Get. The value layout follows the Wireshark `pn_dcp` dissection; device support varies |
+| Set DHCP control | `03/ff` | option code 255, length 1, control 0/1/2 | ✅ | Guarded Set of "use DHCP" / "do not use DHCP" / "do not use DHCP and reset options", followed by a read-back Get. Other DHCP option codes are not set |
 | Multi-block Start/Stop transaction | `05/01` + `05/02` | Global qualifier | ➖ | Not needed for the single-block writes; no multi-block UI |
 | Device signaling / LED | `05/03` | BlockQualifier `0x0000` + SignalValue `0x0100` | ✅ | Implemented as a **plain** identification action (no confirmation; one unicast frame, rate-limited, no retry, no state change). Acknowledged by the lab device; the LED effect itself is not observable over DCP |
 

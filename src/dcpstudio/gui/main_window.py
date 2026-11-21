@@ -183,7 +183,7 @@ class MainWindow(TabBuildersMixin, QMainWindow):
         self._session_notes: list[str] = []
 
         self.setWindowTitle(
-            f"{APP_NAME} {__version__} — PROFINET DCP · guarded writes"
+            f"{APP_NAME} {__version__} — PROFINET DCP"
         )
         self.resize(1440, 940)
         self.setMinimumSize(1100, 760)
@@ -204,7 +204,7 @@ class MainWindow(TabBuildersMixin, QMainWindow):
 
         self.event_log.info(
             "app.start",
-            f"{APP_NAME} {__version__} started (guarded writes)",
+            f"{APP_NAME} {__version__} started",
             {"version": __version__},
         )
         for warning in config_warnings:
@@ -234,7 +234,7 @@ class MainWindow(TabBuildersMixin, QMainWindow):
         subtitle.setWordWrap(True)
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
-        badge = QLabel(f"v{__version__} · GUARDED WRITES")
+        badge = QLabel(f"v{__version__}")
         badge.setObjectName("phaseBadge")
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addLayout(title_box, 1)

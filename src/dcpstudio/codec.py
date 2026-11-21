@@ -25,10 +25,14 @@ from .constants import (
     DCP_HEADER_SIZE,
     DCP_MULTICAST_MAC,
     DEFAULT_RESPONSE_DELAY_FACTOR,
+    DHCP_CONTROL_OFF,
+    DHCP_CONTROL_OFF_RESET_OPTIONS,
+    DHCP_CONTROL_ON,
     ETHERNET_MIN_FRAME_BYTES,
     ETHERTYPE_PROFINET,
     ETHERTYPE_QINQ,
     ETHERTYPE_VLAN,
+    FULL_IP_SUITE_DNS_SERVERS,
     LEGACY_FACTORY_RESET_QUALIFIER,
     MAX_RESPONSE_DELAY_FACTOR,
     MIN_RESPONSE_DELAY_FACTOR,
@@ -38,6 +42,7 @@ from .constants import (
     AllSubOption,
     ControlSubOption,
     DeviceSubOption,
+    DhcpSubOption,
     FrameId,
     IpSubOption,
     Option,
@@ -107,13 +112,18 @@ def request_qualifier(
     Single source of truth for both the encoders and the operator-facing
     display, so a confirmation dialog cannot show a different qualifier than
     the one that is transmitted. ``kind`` matches ``WriteRequest.kind``:
-    ``set_name`` / ``set_ip`` / ``reset`` / ``reset_legacy``.
+    ``set_name`` / ``set_ip`` / ``set_ip_suite`` / ``set_dhcp`` / ``reset`` /
+    ``reset_legacy``.
     """
     if kind == "reset":
         return int(reset_mode or 0) << 1
     if kind == "reset_legacy":
         return LEGACY_FACTORY_RESET_QUALIFIER
-    if kind in ("set_name", "set_ip"):
+    if kind == "set_dhcp":
+        # The temporary/permanent distinction is only defined for Name/IP
+        # values; DHCP control is sent with the temporary qualifier.
+        return BLOCK_QUALIFIER_TEMPORARY
+    if kind in ("set_name", "set_ip", "set_ip_suite"):
         return BLOCK_QUALIFIER_PERMANENT if permanent else BLOCK_QUALIFIER_TEMPORARY
     raise DcpEncodingError(f"Unsupported write operation {kind!r}")
 
@@ -259,6 +269,12 @@ def build_identify_request(
             f"ResponseDelayFactor must be {MIN_RESPONSE_DELAY_FACTOR}.."
             f"{MAX_RESPONSE_DELAY_FACTOR}"
         )
+    dst_raw = parse_mac(dst_mac)
+    if dst_raw[0] & 1 and dst_raw != parse_mac(DCP_MULTICAST_MAC):
+        raise DcpEncodingError(
+            "An Identify request is sent to the DCP multicast MAC "
+            f"{DCP_MULTICAST_MAC} or to one unicast device MAC"
+        )
     payload = (
         encode_block(int(Option.ALL), int(AllSubOption.ALL))
         if name_of_station is None
@@ -297,13 +313,15 @@ def build_get_request(
     A Get request carries a list of Option/SubOption pairs only; it has no
     BlockLength or BlockQualifier per selector. This was verified in p-net's
     ``pf_dcp_get_set`` GET branch and in Wireshark's Get selector dissection.
+    Get is a unicast transaction: multicast and broadcast destinations are
+    rejected, matching the device-side check in ``pf_dcp_check_destination_address``.
     """
     if not selectors:
         raise DcpEncodingError("At least one (option, sub-option) selector is required")
     payload = b"".join(bytes([int(o) & 0xFF, int(s) & 0xFF]) for o, s in selectors)
     return (
         _ether_header(
-            parse_mac(dst_mac),
+            _require_unicast(dst_mac),
             parse_mac(src_mac),
             vlan_id=vlan_id,
             vlan_priority=vlan_priority,
@@ -424,6 +442,113 @@ def build_set_ip_request(
             BLOCK_QUALIFIER_PERMANENT if permanent else BLOCK_QUALIFIER_TEMPORARY
         ),
         value=value,
+    )
+    return _build_set_request(
+        src_mac,
+        dst_mac,
+        xid,
+        block,
+        vlan_id=vlan_id,
+        vlan_priority=vlan_priority,
+    )
+
+
+def build_set_ip_suite_request(
+    src_mac: str,
+    dst_mac: str,
+    xid: int,
+    ip_address: str,
+    subnet_mask: str,
+    gateway: str,
+    *,
+    dns_servers: Sequence[str] = (),
+    permanent: bool,
+    vlan_id: int | None = None,
+    vlan_priority: int = 0,
+) -> bytes:
+    """Build a Set Full IP suite request (option 01 / sub-option 03).
+
+    The value is 28 bytes: the 12-byte IP suite followed by four DNS server
+    IPv4 addresses (Wireshark ``pn_dcp`` dissection of the sub-option value).
+    Missing DNS entries are encoded as 0.0.0.0. The BlockQualifier selects
+    temporary (``0x0000``) or permanent (``0x0001``) storage, exactly as for
+    ``01/02``.
+    """
+    from .validation import validate_dns_servers, validate_ip_suite
+
+    report = validate_ip_suite(ip_address, subnet_mask, gateway)
+    report.errors.extend(validate_dns_servers(dns_servers).errors)
+    if not report.ok:
+        raise DcpEncodingError("Invalid full IP suite: " + "; ".join(report.errors))
+    try:
+        value = (
+            ipaddress.IPv4Address(ip_address).packed
+            + ipaddress.IPv4Address(subnet_mask).packed
+            + ipaddress.IPv4Address(gateway or "0.0.0.0").packed
+            + b"".join(
+                ipaddress.IPv4Address(server or "0.0.0.0").packed
+                for server in _dns_slots(dns_servers)
+            )
+        )
+    except ipaddress.AddressValueError as exc:
+        raise DcpEncodingError(f"Invalid IPv4 parameter: {exc}") from exc
+    block = encode_block(
+        int(Option.IP),
+        int(IpSubOption.FULL_IP_SUITE),
+        block_qualifier=(
+            BLOCK_QUALIFIER_PERMANENT if permanent else BLOCK_QUALIFIER_TEMPORARY
+        ),
+        value=value,
+    )
+    return _build_set_request(
+        src_mac,
+        dst_mac,
+        xid,
+        block,
+        vlan_id=vlan_id,
+        vlan_priority=vlan_priority,
+    )
+
+
+def _dns_slots(dns_servers: Sequence[str]) -> tuple[str, ...]:
+    slots = tuple(server.strip() for server in dns_servers)
+    if len(slots) > FULL_IP_SUITE_DNS_SERVERS:
+        raise DcpEncodingError(
+            f"At most {FULL_IP_SUITE_DNS_SERVERS} DNS servers are encoded"
+        )
+    return slots + ("0.0.0.0",) * (FULL_IP_SUITE_DNS_SERVERS - len(slots))
+
+
+def build_set_dhcp_request(
+    src_mac: str,
+    dst_mac: str,
+    xid: int,
+    control: int,
+    *,
+    vlan_id: int | None = None,
+    vlan_priority: int = 0,
+) -> bytes:
+    """Build a Set DHCP control request (option 03 / sub-option 255).
+
+    The value is the 3-byte form dissected by Wireshark: option code 255,
+    parameter length 1, control parameter data (0 = do not use DHCP,
+    1 = do not use DHCP and reset all DHCP options, 2 = use DHCP). The DHCP
+    option codes themselves (RFC 2132) are not set by this builder.
+    """
+    control = int(control)
+    if control not in (
+        DHCP_CONTROL_OFF,
+        DHCP_CONTROL_OFF_RESET_OPTIONS,
+        DHCP_CONTROL_ON,
+    ):
+        raise DcpEncodingError(f"Unsupported DHCP control value {control}")
+    block = encode_block(
+        int(Option.DHCP),
+        int(DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION),
+        block_qualifier=BLOCK_QUALIFIER_TEMPORARY,
+        value=bytes(
+            [int(DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION), 1, control & 0xFF]
+        ),
     )
     return _build_set_request(
         src_mac,
@@ -624,6 +749,18 @@ def parse_frame(
     frame.data_length = struct.unpack_from("!H", raw, offset + 8)[0]
     offset += DCP_HEADER_SIZE
 
+    if not (
+        frame.service_id == int(ServiceId.IDENTIFY)
+        and frame.service_type == int(ServiceType.REQUEST)
+    ) and frame.response_delay_factor != 0:
+        # DCP-MC-Header carries ResponseDelayFactor; DCP-Header carries a
+        # reserved field that must be zero (IEC 61158-6-10 4.3; the Wireshark
+        # dissector labels it "Reserved" outside Identify requests).
+        frame.warnings.append(
+            "Reserved header field is non-zero; ResponseDelayFactor is only defined "
+            "for Identify requests"
+        )
+
     declared = int(frame.data_length)
     frame.declared_payload_length = declared
     available = len(raw) - offset
@@ -750,6 +887,15 @@ def _parse_blocks(
                 )
             )
         )
+        if (
+            service_type == int(ServiceType.REQUEST)
+            and service_id == int(ServiceId.SET)
+            and block_length < 2
+        ):
+            frame.warnings.append(
+                f"Set block 0x{option:02x}/0x{suboption:02x} is shorter than its "
+                "2-byte BlockQualifier"
+            )
 
         if is_control_response:
             # Control/Response value = [involved option, involved sub-option,
@@ -877,6 +1023,25 @@ def extract_device_identity(
                         identity.ip_block_info = block.block_info
                     else:
                         identity.warnings.append("IP parameter block is shorter than 12 bytes")
+                elif block.suboption == int(IpSubOption.FULL_IP_SUITE):
+                    if len(block.value) >= 28:
+                        identity.ip_address = _ipv4_text(block.value[0:4])
+                        identity.subnet_mask = _ipv4_text(block.value[4:8])
+                        identity.gateway = _ipv4_text(block.value[8:12])
+                        servers = [
+                            _ipv4_text(block.value[offset : offset + 4])
+                            for offset in (12, 16, 20, 24)
+                        ]
+                        identity.dns_servers = [
+                            server
+                            for server in servers
+                            if server and server != "0.0.0.0"
+                        ]
+                        identity.ip_block_info = block.block_info
+                    else:
+                        identity.warnings.append(
+                            "Full IP suite block is shorter than 28 bytes"
+                        )
             elif block.option == int(Option.DEVICE_PROPERTIES):
                 if block.suboption == int(DeviceSubOption.VENDOR):
                     identity.vendor_name = _decode_text(block.value)
@@ -913,6 +1078,16 @@ def extract_device_identity(
                     if len(block.value) >= 4:
                         identity.oem_vendor_id = struct.unpack_from("!H", block.value, 0)[0]
                         identity.oem_device_id = struct.unpack_from("!H", block.value, 2)[0]
+            elif block.option == int(Option.DHCP):
+                if block.suboption == int(
+                    DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION
+                ) and len(block.value) >= 3:
+                    if block.value[2] <= 2:
+                        identity.dhcp_control = int(block.value[2])
+                    else:
+                        identity.warnings.append(
+                            f"DHCP control value 0x{block.value[2]:02x} is reserved"
+                        )
         except (IndexError, struct.error, ValueError) as exc:  # defensive
             identity.warnings.append(
                 f"Could not decode block 0x{block.option:02x}/0x{block.suboption:02x}: {exc}"

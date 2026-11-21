@@ -4,7 +4,8 @@ Status: **Implemented, tested and consolidated** — capability phases 1–4 and
 architecture Programme phases 0–7 are complete (2026-11-19)
 Application: `dcpstudio` 0.1.1
 Scope of this build: **PROFINET DCP discovery, passive decoding, Get,
-LED Signal, per-operation-confirmed NameOfStation/IP Set, verified
+LED Signal, per-operation-confirmed NameOfStation/IP Set, Full IP suite (`01/03`)
+and DHCP control (`03/ff`) Set, verified
 reset variants (RTFS modes 1/2/3/4/8/9 and legacy `05/05`), post-checks, the functional
 test runner, diagnostics, PCAP, JSON/HTML reporting, and a headless CLI**
 
@@ -162,7 +163,7 @@ flowchart TB
 | `services/discovery.py` | One-request Identify, Xid/service/target matching, dedupe, late/unrelated handling |
 | `services/monitor.py` | Monitor loop: repeats `DiscoveryService.discover` at a user-chosen interval, diffs each snapshot, never constructs a transport and never writes |
 | `services/get.py` | One-request read-only Get, block presets, Xid/target matching, block-error reporting |
-| `services/write.py` | Set/Reset, confirmation, fresh target revalidation, one-shot send, read-back, reset post-check |
+| `services/write.py` | Set (Name/IP/Full IP suite/DHCP control) and Reset, confirmation, fresh target revalidation, one-shot send, read-back, reset post-check |
 | `services/signal.py` | DCP Signal (`05/03`): one unicast frame, rate-limited, never retried; result `acknowledged` with `verification="not_attempted"`. Never routed through `WriteService` |
 | `testrunner/runner.py` | Run orchestration, service wiring, result helpers and the ID→handler dispatch; the handlers themselves live in `testrunner/handlers/` |
 | `testrunner/handlers/` | One mixin per ID namespace (`env`, `parser`, `protocol`, `validation`, `write`); `TestRunner` inherits them, so `getattr(self, f"_test_{id}")` still resolves the handler |

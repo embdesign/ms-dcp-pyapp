@@ -195,6 +195,41 @@ def test_reset_modes_3_and_9_are_transmitted(capsys, mode):
     assert output["block_qualifier"] == int(mode) << 1
 
 
+def test_set_ip_suite_guarded_demo_is_read_back(capsys):
+    code = cli.main(
+        [
+            "set-ip-suite",
+            *FAST,
+            "--mac",
+            DEVICE_MAC,
+            "--ip",
+            "192.0.2.77",
+            "--mask",
+            "255.255.255.0",
+            "--gateway",
+            "192.0.2.1",
+            "--dns",
+            "192.0.2.53",
+            *GUARDS,
+            "--json",
+        ]
+    )
+    output = _json(capsys)
+    assert code == cli.EXIT_OK
+    assert output["state"] == "acknowledged"
+    assert output["verification"] == "verified"
+
+
+def test_set_dhcp_guarded_demo_is_read_back(capsys):
+    code = cli.main(
+        ["set-dhcp", *FAST, "--mac", DEVICE_MAC, "--dhcp", "on", *GUARDS, "--json"]
+    )
+    output = _json(capsys)
+    assert code == cli.EXIT_OK
+    assert output["state"] == "acknowledged"
+    assert output["verification"] == "verified"
+
+
 def test_legacy_reset_post_checks_the_target(capsys):
     code = cli.main(
         ["reset", *FAST, "--mac", DEVICE_MAC, "--legacy", *GUARDS, "--json"]

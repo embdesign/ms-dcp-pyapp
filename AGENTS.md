@@ -17,7 +17,7 @@ Read this before changing code. It records only facts verified in this tree.
 
 ```bash
 uv sync                                     # create .venv + dev group
-uv run pytest                               # full suite (offscreen Qt, 302 tests)
+uv run pytest                               # full suite (offscreen Qt, 316 tests)
 uv run pytest --cov=dcpstudio --cov-report=term-missing
 uv run ruff check src tests tools           # configured lint gate (clean)
 uv run mypy                                 # typed gate for the pure modules (clean)
@@ -81,12 +81,19 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   read-back / post-check). No automatic retry, no rollback, no batch or
   broadcast path, unicast targets only.
 - Operation text and parameters live **once** in `operations.py`
-  (`set_name_spec`, `set_ip_spec`, `reset_mode_spec`, `legacy_reset_spec`,
+  (`set_name_spec`, `set_ip_spec`, `set_ip_suite_spec`, `set_dhcp_spec`,
+  `reset_mode_spec`, `legacy_reset_spec`,
   `confirmation_for`). The GUI (`_apply_*`, `_run_tests`), `cli.py` and
   `testrunner/runner.py` must all consume it — never copy the consequences or
   parameter dicts into a caller. The wire BlockQualifier comes from
   `codec.request_qualifier()`, which the encoders also use; do not recompute
   `mode << 1` anywhere.
+- The four Set kinds are `set_name` (`02/02`), `set_ip` (`01/02`),
+  `set_ip_suite` (`01/03`, 12-byte suite + four DNS slots) and `set_dhcp`
+  (`03/ff`, option code 255 + length 1 + control 0/1/2). Each has a builder in
+  `codec.py`, a branch in `WriteService._validate_request` / `_build` /
+  `_verify_set`, and a spec in `operations.py`; add a new kind in all four
+  places or not at all.
 - The Test Runner validates a **declared device under test**. `DEVICE_VALIDATION_SUITE`
   and `FULL_VALIDATION_SUITE` in `testrunner/cases.py` include `write.set_name`,
   `write.set_ip` and `write.reset`, because a device is not validated until those

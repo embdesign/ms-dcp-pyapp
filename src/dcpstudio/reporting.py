@@ -202,7 +202,7 @@ def render_html_report(context: ReportContext) -> str:
 
     def device_rows() -> str:
         if not devices:
-            return empty_row(9, "No devices discovered.")
+            return empty_row(11, "No devices discovered.")
         rows = []
         for d in devices:
             ip_value = d.get("ip_address")
@@ -214,6 +214,8 @@ def render_html_report(context: ReportContext) -> str:
                     cell(ip_display, mono=True),
                     cell(d.get("subnet_mask") or "—", mono=True),
                     cell(d.get("gateway") or "—", mono=True),
+                    cell(", ".join(d.get("dns_servers") or []) or "—", mono=True),
+                    cell(d.get("dhcp_control_text") or "—"),
                     cell(d.get("vendor_id_hex") or "—", mono=True),
                     cell(d.get("device_id_hex") or "—", mono=True),
                     cell(", ".join(d.get("device_role_names") or []) or "not advertised"),
@@ -460,7 +462,7 @@ footer {{ color:var(--muted); font-size:12px; margin-top:28px; }}
   <div style="overflow:auto">
   <table>
     <thead><tr><th>MAC</th><th>NameOfStation</th><th>IP</th><th>Mask</th><th>Gateway</th>
-    <th>Vendor ID</th><th>Device ID</th><th>Role</th><th>RTT ms</th></tr></thead>
+    <th>DNS</th><th>DHCP</th><th>Vendor ID</th><th>Device ID</th><th>Role</th><th>RTT ms</th></tr></thead>
     <tbody>{device_rows()}</tbody>
   </table>
   </div>

@@ -28,7 +28,9 @@ from datetime import datetime
 from ..codec import (
     build_factory_reset_legacy_request,
     build_reset_to_factory_request,
+    build_set_dhcp_request,
     build_set_ip_request,
+    build_set_ip_suite_request,
     build_set_name_request,
     classify_set_response,
     new_xid,
@@ -40,9 +42,13 @@ from ..constants import (
     DEFAULT_MIN_REQUEST_INTERVAL_S,
     DEFAULT_POST_CHECK_WINDOW_S,
     DEFAULT_RESPONSE_DELAY_FACTOR,
+    DHCP_CONTROL_OFF,
+    DHCP_CONTROL_OFF_RESET_OPTIONS,
+    DHCP_CONTROL_ON,
     SUPPORTED_RESET_MODES,
     ControlSubOption,
     DeviceSubOption,
+    DhcpSubOption,
     FrameId,
     IpSubOption,
     Option,
@@ -66,7 +72,7 @@ from ..outcomes import (
 )
 from ..safety import ConfirmationRequest, SafetyError, SafetyGate
 from ..transport.base import DcpTransport, TransportError
-from ..validation import validate_ip_suite, validate_station_name
+from ..validation import validate_dns_servers, validate_ip_suite, validate_station_name
 from .correlation import PendingRequest, decide_frame, wait_for_response
 from .discovery import LATE_RESPONSE_GRACE_S, DiscoveryConfig, DiscoveryService
 from .get import GetConfig, GetService
@@ -107,6 +113,8 @@ class WriteRequest:
     gateway: str | None = None
     permanent: bool = True
     reset_mode: int | None = None
+    dns_servers: tuple[str, ...] = ()
+    dhcp_control: int | None = None
     # Current NameOfStation forwarded from the selected device. It is only used
     # for the read-only revalidation fallback (a filtered multicast Identify)
     # when the target ignores unicast Identify; it never reaches the Set frame.
@@ -399,7 +407,7 @@ class WriteService:
 
         self._classify_response(result, response)
         if result.state == "acknowledged" and not cancelled_before_response:
-            if request.kind in ("set_name", "set_ip"):
+            if request.kind in ("set_name", "set_ip", "set_ip_suite", "set_dhcp"):
                 self._execute_set(
                     result, request, cancel_event=cancel_event, progress=progress
                 )
@@ -438,7 +446,11 @@ class WriteService:
             finished_at=started,
             timeout_s=cfg.timeout_s,
             vlan_id=cfg.vlan_id,
-            permanent=request.permanent if request.kind in ("set_name", "set_ip") else None,
+            permanent=(
+                request.permanent
+                if request.kind in ("set_name", "set_ip", "set_ip_suite")
+                else None
+            ),
             block_qualifier=_request_qualifier(request),
             reset_mode=request.reset_mode if request.kind == "reset" else None,
         )
@@ -777,7 +789,14 @@ class WriteService:
 
     # ------------------------------------------------------------ validation
     def _validate_request(self, request: WriteRequest) -> None:
-        if request.kind not in ("set_name", "set_ip", "reset", "reset_legacy"):
+        if request.kind not in (
+            "set_name",
+            "set_ip",
+            "set_ip_suite",
+            "set_dhcp",
+            "reset",
+            "reset_legacy",
+        ):
             raise ValueError(f"Unsupported write operation {request.kind!r}")
         if request.confirmation.interface_id != self.transport.interface.id:
             raise SafetyError("Confirmation interface does not match the active interface.")
@@ -825,6 +844,25 @@ class WriteService:
             )
             if not report.ok:
                 raise ValueError("Invalid IPv4 suite: " + "; ".join(report.errors))
+        elif request.kind == "set_ip_suite":
+            if request.ip_address is None or request.subnet_mask is None:
+                raise ValueError("IP address and subnet mask are required")
+            report = validate_ip_suite(
+                request.ip_address,
+                request.subnet_mask,
+                request.gateway or "0.0.0.0",
+            )
+            report.errors.extend(validate_dns_servers(request.dns_servers).errors)
+            report.warnings.extend(validate_dns_servers(request.dns_servers).warnings)
+            if not report.ok:
+                raise ValueError("Invalid full IP suite: " + "; ".join(report.errors))
+        elif request.kind == "set_dhcp":
+            if request.dhcp_control not in (
+                DHCP_CONTROL_OFF,
+                DHCP_CONTROL_OFF_RESET_OPTIONS,
+                DHCP_CONTROL_ON,
+            ):
+                raise ValueError("DHCP control must be 0, 1 or 2")
 
     def _confirm(self, request: WriteRequest) -> None:
         self.safety.confirm(
@@ -853,6 +891,26 @@ class WriteService:
                 request.subnet_mask or "",
                 request.gateway or "0.0.0.0",
                 permanent=request.permanent,
+                vlan_id=request.config.vlan_id,
+            )
+        if request.kind == "set_ip_suite":
+            return build_set_ip_suite_request(
+                src_mac,
+                request.target_mac,
+                xid,
+                request.ip_address or "",
+                request.subnet_mask or "",
+                request.gateway or "0.0.0.0",
+                dns_servers=request.dns_servers,
+                permanent=request.permanent,
+                vlan_id=request.config.vlan_id,
+            )
+        if request.kind == "set_dhcp":
+            return build_set_dhcp_request(
+                src_mac,
+                request.target_mac,
+                xid,
+                int(request.dhcp_control or 0),
                 vlan_id=request.config.vlan_id,
             )
         if request.kind == "reset":
@@ -886,13 +944,34 @@ class WriteService:
         if request.kind == "set_name":
             selector = (int(Option.DEVICE_PROPERTIES), int(DeviceSubOption.NAME_OF_STATION))
             expected = (request.name or "").encode("ascii")
-        else:
+            expected_text = f"NameOfStation={(request.name or '')!r}"
+        elif request.kind == "set_ip":
             selector = (int(Option.IP), int(IpSubOption.IP_PARAMETER))
-            expected = (
-                ipaddress.IPv4Address(request.ip_address or "0.0.0.0").packed
-                + ipaddress.IPv4Address(request.subnet_mask or "0.0.0.0").packed
-                + ipaddress.IPv4Address(request.gateway or "0.0.0.0").packed
+            expected = _ip_suite_bytes(request)
+            expected_text = (
+                f"{request.ip_address}/{request.subnet_mask} "
+                f"gw {request.gateway or '0.0.0.0'}"
             )
+        elif request.kind == "set_ip_suite":
+            selector = (int(Option.IP), int(IpSubOption.FULL_IP_SUITE))
+            expected = _ip_suite_bytes(request) + _dns_bytes(request.dns_servers)
+            expected_text = (
+                f"{request.ip_address}/{request.subnet_mask} "
+                f"gw {request.gateway or '0.0.0.0'} "
+                f"dns {', '.join(request.dns_servers) if request.dns_servers else 'none'}"
+            )
+        elif request.kind == "set_dhcp":
+            selector = (
+                int(Option.DHCP),
+                int(DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION),
+            )
+            control = int(request.dhcp_control or 0)
+            expected = bytes(
+                [int(DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION), 1, control]
+            )
+            expected_text = f"DHCP control {control}"
+        else:
+            raise ValueError(f"Unsupported write operation {request.kind!r}")
 
         get_result = self.get_service.get(
             request.target_mac,
@@ -943,15 +1022,11 @@ class WriteService:
             result.verification_detail = "Read-back response contained no matching block."
             return
         observed = block.value.rstrip(b"\x00") if request.kind == "set_name" else block.value
+        if request.kind != "set_name":
+            observed = observed[: len(expected)]
         if observed == expected:
             result.verification = Verification.VERIFIED
-            if request.kind == "set_name":
-                result.verification_detail = f"Read-back NameOfStation={request.name!r}."
-            else:
-                result.verification_detail = (
-                    f"Read-back {request.ip_address}/{request.subnet_mask} "
-                    f"gw {request.gateway or '0.0.0.0'}."
-                )
+            result.verification_detail = f"Read-back {expected_text}."
         else:
             result.verification = Verification.MISMATCH
             if request.kind == "set_name":
@@ -961,8 +1036,7 @@ class WriteService:
                 )
             else:
                 result.verification_detail = (
-                    "Read-back IP parameter bytes="
-                    f"{observed.hex()}, expected {expected.hex()}."
+                    f"Read-back bytes={observed.hex()}, expected {expected.hex()}."
                 )
 
     # ------------------------------------------------------------ post-check
@@ -1059,6 +1133,19 @@ class WriteService:
         return result
 
 
+def _ip_suite_bytes(request: WriteRequest) -> bytes:
+    return (
+        ipaddress.IPv4Address(request.ip_address or "0.0.0.0").packed
+        + ipaddress.IPv4Address(request.subnet_mask or "0.0.0.0").packed
+        + ipaddress.IPv4Address(request.gateway or "0.0.0.0").packed
+    )
+
+
+def _dns_bytes(dns_servers: tuple[str, ...]) -> bytes:
+    slots = tuple(dns_servers[:4]) + ("0.0.0.0",) * (4 - min(4, len(dns_servers)))
+    return b"".join(ipaddress.IPv4Address(server or "0.0.0.0").packed for server in slots)
+
+
 def _wrong_block_detail(pending: _PendingWrite, frame: DcpFrame) -> str | None:
     """Return why a Control/Response belongs to another block, or ``None``.
 
@@ -1094,6 +1181,14 @@ def _operation_shape(request: WriteRequest) -> tuple[str, int, int]:
         )
     if request.kind == "set_ip":
         return "Set IP parameters", int(Option.IP), int(IpSubOption.IP_PARAMETER)
+    if request.kind == "set_ip_suite":
+        return "Set Full IP suite", int(Option.IP), int(IpSubOption.FULL_IP_SUITE)
+    if request.kind == "set_dhcp":
+        return (
+            "Set DHCP control",
+            int(Option.DHCP),
+            int(DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION),
+        )
     if request.kind == "reset":
         return "ResetToFactorySettings", int(Option.CONTROL), int(ControlSubOption.RESET_TO_FACTORY)
     if request.kind == "reset_legacy":

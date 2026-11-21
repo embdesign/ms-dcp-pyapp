@@ -42,8 +42,11 @@ table](docs/pics/dcp_studio.png)
 - Performs read-only **Get** reads for identity, IP, name, Device ID, role,
   options, alias, instance, OEM ID, and device initiative blocks, with explicit
   DCP block-error reporting.
-- Performs **Set NameOfStation** and **Set IP parameters** with
+- Performs **Set NameOfStation**, **Set IP parameters** and **Set Full IP
+  suite** (`01/03`, IP/mask/gateway plus up to four DNS servers) with
   temporary/permanent BlockQualifier selection and a read-back Get.
+- Performs a guarded **DHCP control Set** (`03/ff`): use DHCP, do not use DHCP,
+  or do not use DHCP and reset all DHCP options.
 - Performs **ResetToFactorySettings** for every mode of the DCP reset table
   (1, 2, 3, 4, 8, 9), and the older
   **legacy FactoryReset** (`05/05`, no mode field, full reset); every reset
@@ -64,11 +67,13 @@ table](docs/pics/dcp_studio.png)
   synthetic offline fixtures for tests.
 
 It does **not** implement PROFINET cyclic IO, controller commissioning, DCE-RPC/
-CM, firmware flashing, DHCP, or batch/broadcast state changes.
+CM, firmware flashing, DHCP option-value assignment, or batch/broadcast state
+changes.
 
 Within DCP itself the omissions are deliberate and recorded in the support
-matrix: Hello is decoded but never sent, Set Full IP suite (`01/03`, DNS) and the
-DHCP option (`03/xx`) are not transmitted, and Control Start/Stop multi-block
+matrix: Hello is decoded but never sent, the individual DHCP option codes
+(`03/12`…`03/61`) are not assigned (only the DHCP on/off control), and Control
+Start/Stop multi-block
 transactions (`05/01`/`05/02`) are not used. All six named reset modes are
 implemented; which data a given device erases stays vendor-specific. Get accepts arbitrary
 Option/SubOption selectors through the codec and `dcp-cli get --selector`; the
@@ -224,8 +229,8 @@ or refusal, and `2` inconclusive/outcome unknown (no matching response).
 |---|---|
 | **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, optional NameOfStation filter, Identify discovery, device table with client-side search/uncommissioned filter and sorting, duplicate NameOfStation/IP warnings, inventory CSV export and plan-CSV comparison |
 | **Monitor** | Repeated read-only Identify at a configurable interval with added/removed/changed-device detection (NameOfStation, IP, role, IDs, alias, options) |
-| **Device Details** | Identity summary, per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets, and **Signal device (flash LED)** — one plain `05/03` frame |
-| **Configuration** | NameOfStation and IPv4 Set operations with temporary/permanent qualifier, validation, per-operation confirmation, fresh target revalidation, and read-back verification |
+| **Device Details** | Identity summary (including DNS servers and DHCP control), per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets (identity, IP, network setup, name, ID/role, options, diagnostics) and **Signal device (flash LED)** — one plain `05/03` frame |
+| **Configuration** | NameOfStation and IPv4 Set operations (`01/02`), the Full IP suite with DNS servers (`01/03`) and the DHCP on/off control (`03/ff`), all with temporary/permanent qualifier, validation, per-operation confirmation, fresh target revalidation and read-back verification |
 | **Reset** | ResetToFactorySettings modes 1, 2, 3, 4, 8 and 9 with the documented wire qualifier, plus the legacy FactoryReset (`05/05`, full reset, no mode field); per-operation confirmation and an optional read-only post-check |
 | **Test Runner** | Tests grouped by category (environment, offline parser/transactions/validation, live DCP, state-changing). Pick the device under test, then run the **device validation suite** (read-only checks plus one Set Name, one Set IP and one Reset) or the **full validation suite**; read-only presets and per-test selection are available too. The DUT selection plus the run button is the single authorization for the suite; every frame is sent once, revalidated and read back |
 | **Packet Capture** | Live/offline frame list, DCP filter, hex detail, PCAP export/import |
@@ -358,10 +363,12 @@ docs/                   protocol, references, lab, troubleshooting, fixtures
 - A missing Get response is not proof that a device does not support the block;
   a device may also return an explicit DCP block error.
 - Unknown/vendor-specific blocks are displayed but not interpreted.
-- Name/IP Set, all reset modes (1/2/3/4/8/9) and legacy FactoryReset (`05/05`) are
-  implemented. The qualifier encoding is verified; the erased scope remains
-  vendor-dependent (p-net resets application and communication data for every
-  mode ≥ 3).
+- Name/IP Set, Full IP suite (`01/03`), DHCP on/off control (`03/ff`), all reset
+  modes (1/2/3/4/8/9) and legacy FactoryReset (`05/05`) are
+  implemented. The qualifiers and value layouts are verified; the erased scope
+  and DHCP behaviour remain
+  device-dependent (a conformant p-net stack resets application and
+  communication data for every reset mode ≥ 3).
 - Signal (`05/03`) is implemented as an identification aid, not a state change:
   it changes no configuration, and a device may or may not flash its LED. The
   acknowledgement is not proof that the LED was visible, so the on-screen result

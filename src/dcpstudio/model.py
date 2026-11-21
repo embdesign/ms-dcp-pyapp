@@ -11,6 +11,7 @@ from . import APP_NAME, __version__
 from .constants import (
     BLOCK_ERROR_TEXT,
     DEVICE_ROLE_BITS,
+    DHCP_CONTROL_TEXT,
     OPTION_NAMES,
     SERVICE_NAMES,
     SERVICE_TYPE_NAMES,
@@ -206,6 +207,8 @@ class DeviceIdentity:
     ip_address: str | None = None
     subnet_mask: str | None = None
     gateway: str | None = None
+    dns_servers: list[str] = field(default_factory=list)
+    dhcp_control: int | None = None
     vendor_id: int | None = None
     device_id: int | None = None
     vendor_name: str | None = None
@@ -257,6 +260,18 @@ class DeviceIdentity:
         return f"0x{(self.vendor_id or 0):04x} / 0x{(self.device_id or 0):04x}"
 
     @property
+    def dns_text(self) -> str:
+        return ", ".join(self.dns_servers) if self.dns_servers else "not advertised"
+
+    @property
+    def dhcp_text(self) -> str:
+        if self.dhcp_control is None:
+            return "not advertised"
+        return DHCP_CONTROL_TEXT.get(
+            self.dhcp_control, f"reserved ({self.dhcp_control})"
+        )
+
+    @property
     def options_text(self) -> str:
         if not self.device_options:
             return "not advertised"
@@ -278,6 +293,7 @@ class DeviceIdentity:
             "ip_address",
             "subnet_mask",
             "gateway",
+            "dhcp_control",
             "vendor_id",
             "device_id",
             "vendor_name",
@@ -291,6 +307,8 @@ class DeviceIdentity:
             value = getattr(other, attr)
             if value is not None:
                 setattr(self, attr, value)
+        if other.dns_servers:
+            self.dns_servers = list(other.dns_servers)
         for opt in other.device_options:
             if opt not in self.device_options:
                 self.device_options.append(opt)
@@ -316,6 +334,9 @@ class DeviceIdentity:
             "ip_address": self.ip_address,
             "subnet_mask": self.subnet_mask,
             "gateway": self.gateway,
+            "dns_servers": list(self.dns_servers),
+            "dhcp_control": self.dhcp_control,
+            "dhcp_control_text": self.dhcp_text,
             "vendor_id": self.vendor_id,
             "device_id": self.device_id,
             "vendor_id_hex": f"0x{self.vendor_id:04x}" if self.vendor_id is not None else None,

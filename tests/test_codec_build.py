@@ -188,3 +188,23 @@ def test_identify_name_filter_rejects_empty_and_invalid_names():
 def test_identify_all_has_no_name_filter():
     frame = parse_frame(build_identify_request("02:00:00:00:00:01", 1))
     assert identify_filter_name(frame) is None
+
+
+def test_identify_destination_must_be_dcp_multicast_or_a_device():
+    for bad in ("ff:ff:ff:ff:ff:ff", "01:0e:cf:00:00:01", "01:00:5e:00:00:01"):
+        with pytest.raises(DcpEncodingError):
+            build_identify_request("08:00:27:0f:aa:bb", 1, dst_mac=bad)
+    # The DCP multicast MAC and a unicast device MAC are both valid.
+    build_identify_request("08:00:27:0f:aa:bb", 1)
+    build_identify_request("08:00:27:0f:aa:bb", 1, dst_mac="02:00:00:00:00:11")
+
+
+def test_get_request_must_target_one_unicast_device():
+    for bad in ("01:0e:cf:00:00:00", "ff:ff:ff:ff:ff:ff"):
+        with pytest.raises(DcpEncodingError):
+            build_get_request("08:00:27:0f:aa:bb", bad, 1, [(1, 2)])
+    frame = parse_frame(
+        build_get_request("08:00:27:0f:aa:bb", "02:00:00:00:00:11", 1, [(1, 2)])
+    )
+    assert frame.service_id == 0x03
+    assert frame.response_delay_factor == 0

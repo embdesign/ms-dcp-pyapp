@@ -36,9 +36,9 @@ class ResetTabMixin:
         layout.setSpacing(10)
         layout.addWidget(
             banner(
-                "<b>Confirmed reset.</b> ResetToFactorySettings uses DCP option 05 / "
-                "sub-option 06 with BlockQualifier = mode &lt;&lt; 1. Device support and the "
-                "data actually erased are vendor-dependent. Every reset requires "
+                "<b>Confirmed reset.</b> ResetToFactorySettings may reboot the device "
+                "and erase stored configuration; the exact scope is device-dependent. "
+                "Every reset requires "
                 "per-operation authorization and safe-maintenance confirmation, plus "
                 "target revalidation. No automatic retry or rollback exists.",
                 "Danger",
@@ -81,9 +81,9 @@ class ResetTabMixin:
         mode_layout.addWidget(self.reset_mode_description)
         layout.addWidget(mode_group)
 
-        table = QTableWidget(len(RESET_MODES) + 1, 4)
+        table = QTableWidget(len(RESET_MODES) + 1, 3)
         table.setHorizontalHeaderLabels(
-            ["Reset mode", "Wire BlockQualifier", "Documented meaning", "Status"]
+            ["Reset mode", "Wire BlockQualifier", "Meaning"]
         )
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         table.verticalHeader().setVisible(False)
@@ -98,20 +98,10 @@ class ResetTabMixin:
                 table_item(reset_mode_spec(mode).qualifier, mono=True),
             )
             table.setItem(row, 2, table_item(meaning))
-            table.setItem(
-                row,
-                3,
-                table_item(
-                    "Implemented (guarded)"
-                    if mode in SUPPORTED_RESET_MODES
-                    else "Disabled — semantics unverified"
-                ),
-            )
         legacy_row = len(RESET_MODES)
         table.setItem(legacy_row, 0, table_item("— (05/05)", mono=True))
         table.setItem(legacy_row, 1, table_item("0x0000", mono=True))
         table.setItem(legacy_row, 2, table_item("Legacy FactoryReset — full reset, no mode field"))
-        table.setItem(legacy_row, 3, table_item("Implemented (guarded)"))
         layout.addWidget(table, 1)
 
         controls = QHBoxLayout()
@@ -161,15 +151,11 @@ class ResetTabMixin:
         layout.addWidget(self.reset_post_check_label)
 
         notes = QLabel(
-            "<b>Legacy 05/05:</b> an older FactoryReset with no mode field. It is sent with "
-            "BlockQualifier 0x0000 and performs a full reset (p-net sets reset mode 99, "
-            "\"reset all\"); the erased scope cannot be selected. <b>Modes 3 and 9:</b> "
-            "the qualifier values are defined by Wireshark/IEC 61158-6-10, and a "
-            "p-net-based device treats every mode \u2265 3 as application plus "
-            "communication data; the exact scope is still vendor-specific, so read the "
-            "confirmation text. A DCP "
-            "factory reset does not necessarily erase application data, firmware, or "
-            "vendor-specific settings."
+            "<b>Legacy FactoryReset (05/05):</b> an older variant without a mode "
+            "field. It always performs a full reset and the erased scope cannot be "
+            "selected. A reset can also affect data that the selected mode does not "
+            "mention; the exact scope is device-dependent. A DCP reset does not "
+            "necessarily erase firmware or vendor-specific settings."
         )
         notes.setWordWrap(True)
         notes.setTextFormat(Qt.TextFormat.RichText)
@@ -186,9 +172,9 @@ class ResetTabMixin:
         if mode == LEGACY_RESET_CHOICE:
             self.reset_mode_description.setText(
                 "<b>Option 05 / sub-option 05</b> · BlockQualifier 0x0000 (\"Default\"). "
-                "This older variant has no mode field: the device performs a full reset and "
-                "p-net ignores the qualifier. The erased scope is vendor-dependent and cannot "
-                "be selected. Device support is not guaranteed."
+                "This older variant has no mode field: the device performs a full reset "
+                "and the erased scope cannot be selected. Device support is not "
+                "guaranteed."
             )
             return
         mode = int(mode)
@@ -196,9 +182,13 @@ class ResetTabMixin:
         scope = {
             1: "Resets application data; communication parameters may remain.",
             2: "Resets communication parameters (name/IP); application data may remain.",
+            3: "Resets engineering parameters; some devices also reset application and "
+            "communication data.",
             4: "Resets all stored data except the security configuration.",
-            8: "Reset all stored data to factory values; vendor-dependent scope.",
-        }.get(mode, "Documented scope is incomplete.")
+            8: "Resets all stored data to factory values; the device decides the exact scope.",
+            9: "Resets and restores data; some devices also reset application and "
+            "communication data.",
+        }.get(mode, "The erased scope is device-dependent.")
         self.reset_mode_description.setText(
             f"<b>Qualifier {reset_mode_spec(mode).qualifier}</b> · "
             f"{esc(meaning)}. "

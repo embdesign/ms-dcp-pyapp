@@ -176,6 +176,8 @@ def device_summary_html(device: DeviceIdentity) -> str:
         ("IP address", device.ip_text),
         ("Subnet mask", display_addr(device.subnet_mask)),
         ("Gateway", display_addr(device.gateway)),
+        ("DNS servers", device.dns_text),
+        ("DHCP control", device.dhcp_text),
         (
             "Vendor ID",
             f"0x{device.vendor_id:04x}" if device.vendor_id is not None else "not advertised",

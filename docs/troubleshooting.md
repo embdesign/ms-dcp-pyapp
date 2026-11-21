@@ -262,6 +262,8 @@ only through the Configuration and Reset tabs (see §9).
 | `Cancelled after transmission (outcome unknown)` | **Cancel** was pressed after the Set/Reset left the NIC. Cancellation does not undo the frame. Re-discover and inspect current state; do not blindly retry. |
 | Read-back `mismatch` | The device acknowledged the Set but the subsequent Get returned different values. Stop and investigate; do not loop the Set. |
 | Read-back `unknown` | The read-back Get timed out or was incomplete. The acknowledgement is not proof of persistence. |
+| Full IP suite acknowledged, DNS not visible | The device may not return `01/03` on Get or may ignore the DNS slots. The acknowledgement proves only that the block was accepted; check name/IP support before retrying. |
+| DHCP Set rejected | A device that does not implement DHCP answers with a DCP block error (commonly `0x01` option unsupported). This is device behaviour, not a tool defect; no retry is attempted. |
 | Reset acknowledged, then no post-check response | The bounded post-check window expired without an Identify response. The device may still be rebooting. This is outcome unknown. Use **Verify target after reset** later; do not resend the reset automatically. |
 | Reset post-check responded | The device is reachable at the same MAC. This does not prove which data was erased or that the requested reset scope was implemented. |
 | Discovery warns about a duplicate NameOfStation/IP | Two devices advertise the same address, so they cannot be told apart or addressed unambiguously. Fix the assignment (one device at a time) before using Set/Reset by name or IP. |

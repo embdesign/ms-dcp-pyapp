@@ -19,6 +19,7 @@ from ..constants import (
     SUBOPTION_NAMES,
     ControlSubOption,
     DeviceSubOption,
+    DhcpSubOption,
     FrameId,
     IpSubOption,
     Option,
@@ -37,6 +38,8 @@ EventLog = Callable[[str, str, dict], None]
 ALL_SELECTORS: tuple[tuple[int, int], ...] = (
     (int(Option.IP), int(IpSubOption.MAC)),
     (int(Option.IP), int(IpSubOption.IP_PARAMETER)),
+    (int(Option.IP), int(IpSubOption.FULL_IP_SUITE)),
+    (int(Option.DHCP), int(DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION)),
     (int(Option.DEVICE_PROPERTIES), int(DeviceSubOption.VENDOR)),
     (int(Option.DEVICE_PROPERTIES), int(DeviceSubOption.NAME_OF_STATION)),
     (int(Option.DEVICE_PROPERTIES), int(DeviceSubOption.DEVICE_ID)),
@@ -75,6 +78,14 @@ GET_PRESETS: dict[str, GetPreset] = {
         (
             (int(Option.IP), int(IpSubOption.MAC)),
             (int(Option.IP), int(IpSubOption.IP_PARAMETER)),
+        ),
+    ),
+    "network": GetPreset(
+        "network",
+        "Network setup (IP suite with DNS servers, DHCP control)",
+        (
+            (int(Option.IP), int(IpSubOption.FULL_IP_SUITE)),
+            (int(Option.DHCP), int(DhcpSubOption.CONTROL_FOR_ADDRESS_RESOLUTION)),
         ),
     ),
     "name": GetPreset(

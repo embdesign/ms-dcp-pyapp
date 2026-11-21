@@ -9,12 +9,13 @@ safety rules themselves stay in ``operations.py`` / ``services/write.py``.
 
 from __future__ import annotations
 
+import ipaddress
 import threading
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QLabel, QMessageBox
 
-from ...constants import SUPPORTED_RESET_MODES
+from ...constants import SUPPORTED_RESET_MODES, IpSubOption, Option
 from ...html_render import esc
 from ...model import DeviceIdentity, WriteResult
 from ...operations import (
@@ -22,7 +23,9 @@ from ...operations import (
     confirmation_for,
     legacy_reset_spec,
     reset_mode_spec,
+    set_dhcp_spec,
     set_ip_spec,
+    set_ip_suite_spec,
     set_name_spec,
 )
 from ...safety import ConfirmationRequest
@@ -32,7 +35,7 @@ from ...services.write import (
     WriteRequest,
     identity_text,
 )
-from ...validation import validate_ip_suite, validate_station_name
+from ...validation import validate_dns_servers, validate_ip_suite, validate_station_name
 from ..confirmation import ConfirmationDialog
 from ..presentation import signal_result_html, write_result_html
 from ..workers import PostCheckWorker, WriteWorker
@@ -109,6 +112,26 @@ class WriteFlowMixin:
             self.gateway_edit.setText(
                 device.gateway if device.gateway and device.gateway != "0.0.0.0" else ""
             )
+            full_suite = next(
+                (
+                    block
+                    for block in device.blocks
+                    if block.option == int(Option.IP)
+                    and block.suboption == int(IpSubOption.FULL_IP_SUITE)
+                    and len(block.value) == 28
+                ),
+                None,
+            )
+            if full_suite is not None:
+                servers = [
+                    str(ipaddress.IPv4Address(full_suite.value[offset : offset + 4]))
+                    for offset in (12, 16, 20, 24)
+                ]
+                self.dns_edit.setText(
+                    ", ".join(server for server in servers if server != "0.0.0.0")
+                )
+            else:
+                self.dns_edit.setText("")
             self.name_validation_label.setText("")
             self.ip_validation_label.setText("")
 
@@ -132,6 +155,8 @@ class WriteFlowMixin:
         writable = has_target and not busy
         self.apply_name_button.setEnabled(writable)
         self.apply_ip_button.setEnabled(writable)
+        self.apply_ip_suite_button.setEnabled(writable)
+        self.apply_dhcp_button.setEnabled(writable)
         self.apply_reset_button.setEnabled(writable)
         if hasattr(self, "signal_button"):
             # Signal is an identification aid, not a state change: it needs a
@@ -145,9 +170,11 @@ class WriteFlowMixin:
             self.ip_edit,
             self.mask_edit,
             self.gateway_edit,
+            self.dns_edit,
             self.validate_ip_button,
             self.ip_temp_radio,
             self.ip_perm_radio,
+            self.dhcp_combo,
             self.reset_mode_combo,
         ):
             widget.setEnabled(not busy)
@@ -169,7 +196,8 @@ class WriteFlowMixin:
         self.cancel_config_write_button.setEnabled(
             self._write_running()
             and self.write_worker is not None
-            and self.write_worker.request.kind in ("set_name", "set_ip")
+            and self.write_worker.request.kind
+            in ("set_name", "set_ip", "set_ip_suite", "set_dhcp")
         )
         self.reset_post_check_button.setEnabled(
             self.latest_reset_result is not None
@@ -273,6 +301,68 @@ class WriteFlowMixin:
                 subnet_mask=mask,
                 gateway=gateway,
                 permanent=permanent,
+                target_name=device.name_of_station,
+            )
+        )
+
+    def _apply_ip_suite(self) -> None:
+        if self.selected_device is None or self.current_interface is None:
+            return
+        ip = self.ip_edit.text().strip()
+        mask = self.mask_edit.text().strip()
+        gateway = self.gateway_edit.text().strip()
+        dns = [part.strip() for part in self.dns_edit.text().split(",") if part.strip()]
+        report = validate_ip_suite(ip, mask, gateway)
+        dns_report = validate_dns_servers(dns)
+        report.errors.extend(dns_report.errors)
+        report.warnings.extend(dns_report.warnings)
+        self._set_validation_label(self.ip_validation_label, report)
+        if not report.ok:
+            QMessageBox.warning(self, "Invalid full IP suite", report.summary())
+            return
+        device = self.selected_device
+        permanent = self.ip_perm_radio.isChecked()
+        spec = set_ip_suite_spec(
+            ip, mask, gateway, dns, permanent=permanent, previous_ip=device.ip_text
+        )
+        request = self._confirmation_for(spec, device)
+        authorization = self._confirm_operation(request)
+        if authorization is None:
+            return
+        self._start_write(
+            WriteRequest(
+                kind="set_ip_suite",
+                target_mac=device.mac,
+                confirmation=request,
+                authorization=authorization,
+                config=self._current_write_config(),
+                ip_address=ip,
+                subnet_mask=mask,
+                gateway=gateway,
+                dns_servers=tuple(dns),
+                permanent=permanent,
+                target_name=device.name_of_station,
+            )
+        )
+
+    def _apply_dhcp(self) -> None:
+        if self.selected_device is None or self.current_interface is None:
+            return
+        control = int(self.dhcp_combo.currentData())
+        device = self.selected_device
+        spec = set_dhcp_spec(control)
+        request = self._confirmation_for(spec, device)
+        authorization = self._confirm_operation(request)
+        if authorization is None:
+            return
+        self._start_write(
+            WriteRequest(
+                kind="set_dhcp",
+                target_mac=device.mac,
+                confirmation=request,
+                authorization=authorization,
+                config=self._current_write_config(),
+                dhcp_control=control,
                 target_name=device.name_of_station,
             )
         )

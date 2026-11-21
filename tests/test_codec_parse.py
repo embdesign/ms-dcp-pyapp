@@ -4,6 +4,7 @@ import random
 import struct
 
 from dcpstudio.codec import (
+    build_get_request,
     classify_set_response,
     extract_device_identity,
     identify_filter_name,
@@ -304,3 +305,57 @@ def test_rsi_protocol_properties_and_cim_interface_are_named():
         b"\x00\x2a\x12\x01\x00\x00",
     ]
     assert frame.warnings == []
+
+
+def test_extract_full_ip_suite_and_dhcp_from_get_response():
+    from dcpstudio.mock import MockDeviceConfig
+
+    device = MockDeviceConfig(
+        mac="02:00:00:00:00:41",
+        name="net.device",
+        ip="192.0.2.41",
+        mask="255.255.255.0",
+        gateway="192.0.2.1",
+        dns=["192.0.2.53"],
+        dhcp_control=2,
+    )
+    network = MockNetwork([device])
+    request = parse_frame(
+        build_get_request(
+            "08:00:27:0f:aa:bb", device.mac, 1, [(1, 3), (3, 255)]
+        )
+    )
+    identity = extract_device_identity(parse_frame(network.build_get_response(device, request)))
+    assert identity is not None
+    assert identity.ip_address == "192.0.2.41"
+    assert identity.subnet_mask == "255.255.255.0"
+    assert identity.gateway == "192.0.2.1"
+    assert identity.dns_servers == ["192.0.2.53"]
+    assert identity.dhcp_control == 2
+    assert identity.dhcp_text == "Use DHCP for address resolution"
+
+
+def test_non_zero_reserved_header_field_is_reported():
+    raw = bytearray(
+        build_get_request("08:00:27:0f:aa:bb", "02:00:00:00:00:11", 1, [(1, 2)])
+    )
+    # Ethernet (14) + FrameID (2) + ServiceID/Type/Xid (6) = offset 22.
+    struct.pack_into("!H", raw, 22, 0x0032)
+    frame = parse_frame(bytes(raw))
+    assert any("Reserved header field is non-zero" in w for w in frame.warnings)
+
+
+def test_set_block_without_block_qualifier_is_reported():
+    raw = bytes.fromhex(
+        "020000000011"  # dst
+        "0800270faabb"  # src
+        "8892"
+        "fefd"
+        "0400"          # ServiceID Set, ServiceType Request
+        "00000001"      # Xid
+        "0000"          # reserved
+        "0004"          # DCPDataLength
+        "02020000"      # 02/02, BlockLength 0: no qualifier at all
+    )
+    frame = parse_frame(raw)
+    assert any("shorter than its 2-byte BlockQualifier" in w for w in frame.warnings)

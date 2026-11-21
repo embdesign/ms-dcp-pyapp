@@ -49,6 +49,11 @@ class AppConfig:
     max_capture_frames: int = 4000
     report_directory: str = str(default_report_directory())
     show_dcp_only: bool = True
+    # Layout preferences (Edit menu); persisted so a small screen keeps its setup.
+    show_app_header: bool = True
+    show_identify_filters: bool = True
+    show_tab_notices: bool = True
+    compact_spacing: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -10,6 +10,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Small-screen layout controls.** The window minimum is now 900 × 600 px (was
+  1100 × 760) and the initial size is clamped to the available screen instead of
+  always opening at 1440 × 940. A new **Edit** menu toggles the title header, the
+  advanced Identify filter fields, the static notice at the top of each tab and a
+  compact spacing stylesheet; all four options are persisted in `config.json`
+  (`show_app_header`, `show_identify_filters`, `show_tab_notices`,
+  `compact_spacing`). Group-box titles are unchanged. Only static notices can be
+  hidden (`banner(..., notice=True)`); a banner whose text a run fills in
+  (`monitor_notes_label`) and every status/readiness/result label stay visible.
+  While the filter fields are hidden they are **not** applied (the Discover
+  tooltip says Identify-All is sent), so hiding can never change a frame
+  silently. The Identify forms wrap their labels above the fields on a narrow
+  pane, the packet-capture BPF expression moved to the statistics row so it is
+  no longer squeezed, and a 900 × 600 window with the header, filters, notices and
+  spacing compacted shows the whole Identify section without a scrollbar (the
+  notices alone return 44 px per tab).
 - **Custom Get selectors in the GUI.** The Device Details tab has a **Custom
   selectors** field next to the preset combo, so any `Option/Sub-option` block
   (`0x03/0x0c`, `0xff/0x01`, repeatable, comma separated) can be read from the

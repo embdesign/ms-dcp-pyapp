@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -8,6 +9,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QGroupBox,
+    QLabel,
     QMessageBox,
     QScrollArea,
     QTableWidget,
@@ -15,6 +17,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 from dcpstudio.gui.app import create_application  # noqa: E402
 from dcpstudio.gui.main_window import MainWindow  # noqa: E402
+from dcpstudio.gui.tabs.common import NOTICE_PROPERTY  # noqa: E402
 from dcpstudio.gui.tabs.reset import RESET_TABLE_MIN_HEIGHT  # noqa: E402
 from dcpstudio.safety import ConfirmationRequest  # noqa: E402
 from dcpstudio.services.discovery import DiscoveryConfig  # noqa: E402
@@ -30,6 +33,110 @@ from dcpstudio.testrunner.cases import TEST_CASES, TEST_GROUPS  # noqa: E402
 
 def _app() -> QApplication:
     return QApplication.instance() or create_application(["dcpstudio-test"])
+
+
+def _pump(app: QApplication, predicate, timeout: float = 20.0) -> bool:
+    """Process Qt events until ``predicate`` is true or the timeout expires."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+def test_layout_menu_fits_the_window_to_small_screens():
+    """Edit-menu options: header, Identify filters and compact spacing."""
+    app = _app()
+    window = MainWindow()
+    try:
+        assert window.minimumWidth() == 900
+        assert window.minimumHeight() == 600
+        menus = [action.text().replace("&", "") for action in window.menuBar().actions()]
+        assert menus == ["File", "Edit", "Help"]
+        assert window.action_show_header.isChecked() is True
+        assert window.action_show_identify_filters.isChecked() is True
+        assert window.action_show_tab_notices.isChecked() is True
+        assert window.action_compact_spacing.isChecked() is False
+        assert window.header.isHidden() is False
+        assert window.identify_filter_panel.isHidden() is False
+        notices = [
+            label
+            for label in window.findChildren(QLabel)
+            if label.property(NOTICE_PROPERTY)
+        ]
+        assert len(notices) == 8
+
+        window.action_show_header.setChecked(False)
+        window.action_show_identify_filters.setChecked(False)
+        window.action_show_tab_notices.setChecked(False)
+        window.action_compact_spacing.setChecked(True)
+        assert window.header.isHidden() is True
+        assert window.identify_filter_panel.isHidden() is True
+        assert all(label.isHidden() for label in notices)
+        # Live feedback must stay visible: readiness text and monitor notes.
+        assert window.permission_label.property(NOTICE_PROPERTY) is None
+        assert window.permission_label.isHidden() is False
+        assert window.monitor_notes_label.property(NOTICE_PROPERTY) is None
+        assert window.config.show_app_header is False
+        assert window.config.show_identify_filters is False
+        assert window.config.show_tab_notices is False
+        assert window.config.compact_spacing is True
+        assert "QTabBar::tab { padding: 6px 10px; }" in window.styleSheet()
+        assert "Identify-All" in window.discover_button.toolTip()
+        saved = window._current_config()
+        assert saved.show_app_header is False
+        assert saved.show_identify_filters is False
+        assert saved.show_tab_notices is False
+        assert saved.compact_spacing is True
+
+        window.action_show_header.setChecked(True)
+        window.action_show_tab_notices.setChecked(True)
+        assert window.header.isHidden() is False
+        assert all(label.isHidden() is False for label in notices)
+        assert "filter field" in window.discover_button.toolTip()
+
+        window.resize(900, 600)
+        app.processEvents()
+        assert window.width() == 900
+        assert window.height() == 600
+    finally:
+        # Leave the defaults behind: close() persists the config, which the
+        # other GUI tests in this module would otherwise inherit.
+        window.action_show_header.setChecked(True)
+        window.action_show_identify_filters.setChecked(True)
+        window.action_show_tab_notices.setChecked(True)
+        window.action_compact_spacing.setChecked(False)
+        window.close()
+        app.processEvents()
+
+
+def test_hidden_identify_filters_fall_back_to_identify_all():
+    """Hidden filter fields are not applied: the request is Identify-All."""
+    app = _app()
+    window = MainWindow()
+    try:
+        window.interface_table.selectRow(0)
+        app.processEvents()
+        assert window._start_capture() is True
+        window.timeout_spin.setValue(0.5)
+        window.action_show_identify_filters.setChecked(True)
+        window.filter_edit.setText("no-such-station-42")
+
+        window._start_discovery()
+        assert _pump(app, lambda: window.discovery_worker is None) is True
+        assert window.latest_discovery is not None
+        assert window.latest_discovery.devices == []
+
+        window.action_show_identify_filters.setChecked(False)
+        window._start_discovery()
+        assert _pump(app, lambda: window.discovery_worker is None) is True
+        assert window.latest_discovery is not None
+        assert len(window.latest_discovery.devices) == 3
+    finally:
+        window.close()
+        app.processEvents()
 
 
 def test_window_has_eight_tabs_and_state_changing_controls():
@@ -152,7 +259,7 @@ def test_identify_discovery_section_scrolls_instead_of_clipping():
     try:
         window.show()
         window.tabs.setCurrentWidget(window.discovery_tab)
-        window.resize(1100, 760)
+        window.resize(900, 600)
         app.processEvents()
         group = next(
             box

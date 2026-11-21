@@ -131,6 +131,9 @@ class DiscoveryTabMixin:
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         form.setVerticalSpacing(4)
         form.setContentsMargins(0, 0, 0, 0)
+        # On a narrow pane the labels move above their fields instead of
+        # forcing the section wider than the window.
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.timeout_spin = QDoubleSpinBox()
         self.timeout_spin.setRange(0.5, 60.0)
         self.timeout_spin.setSingleStep(0.5)
@@ -177,13 +180,24 @@ class DiscoveryTabMixin:
         form.addRow("Timeout", self.timeout_spin)
         form.addRow("ResponseDelayFactor", self.delay_spin)
         form.addRow("VLAN (802.1Q)", self.vlan_spin)
-        form.addRow("NameOfStation filter", self.filter_edit)
-        form.addRow("Alias filter", self.alias_filter_edit)
-        form.addRow("Vendor filter", self.vendor_filter_edit)
-        form.addRow("Vendor ID filter", self.vendor_id_filter_edit)
-        form.addRow("Device ID filter", self.device_id_filter_edit)
-        form.addRow("Device role filter", self.role_filter_spin)
         discovery_layout.addLayout(form)
+
+        # The Identify filter fields are advanced settings; the Edit menu can
+        # hide them to save height on small screens. While hidden they are not
+        # applied (discovery sends Identify-All), so hidden never means silent.
+        self.identify_filter_panel = QWidget()
+        filter_form = QFormLayout(self.identify_filter_panel)
+        filter_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        filter_form.setVerticalSpacing(4)
+        filter_form.setContentsMargins(0, 0, 0, 0)
+        filter_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        filter_form.addRow("NameOfStation filter", self.filter_edit)
+        filter_form.addRow("Alias filter", self.alias_filter_edit)
+        filter_form.addRow("Vendor filter", self.vendor_filter_edit)
+        filter_form.addRow("Vendor ID filter", self.vendor_id_filter_edit)
+        filter_form.addRow("Device ID filter", self.device_id_filter_edit)
+        filter_form.addRow("Device role filter", self.role_filter_spin)
+        discovery_layout.addWidget(self.identify_filter_panel)
         rate = QLabel(
             "Pacing: at most one request per "
             f"{self.config.min_request_interval_s:.1f} s. One request per button press; "
@@ -453,6 +467,19 @@ class DiscoveryTabMixin:
         )
 
     # -------------------------------------------------------------- discovery
+    def _refresh_discover_tooltip(self) -> None:
+        """Keep the Discover tooltip truthful about hidden filter fields."""
+        if self.config.show_identify_filters:
+            self.discover_button.setToolTip(
+                "Send one Identify request: Identify-All, or an Identify filter when any "
+                "filter field is filled in."
+            )
+        else:
+            self.discover_button.setToolTip(
+                "Send one Identify-All request. The Identify filter fields are hidden "
+                "(Edit menu), so they are not applied."
+            )
+
     @staticmethod
     def _filter_id(value: str, label: str) -> int | None:
         text = value.strip()
@@ -492,7 +519,11 @@ class DiscoveryTabMixin:
             return
         filter_name: str | None = None
         identify_filter = None
-        if unicast_mac is None and apply_filter:
+        if (
+            unicast_mac is None
+            and apply_filter
+            and self.config.show_identify_filters
+        ):
             candidate = self.filter_edit.text().strip()
             if candidate:
                 report = validate_station_name(candidate)

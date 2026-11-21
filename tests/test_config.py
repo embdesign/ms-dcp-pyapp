@@ -13,6 +13,10 @@ def test_config_roundtrip(tmp_path):
         response_delay_factor=100,
         vlan_id=42,
         show_dcp_only=False,
+        show_app_header=False,
+        show_identify_filters=False,
+        show_tab_notices=False,
+        compact_spacing=True,
     )
     save_config(config, path)
     loaded, warnings = load_config(path)
@@ -22,6 +26,10 @@ def test_config_roundtrip(tmp_path):
     assert loaded.response_delay_factor == 100
     assert loaded.vlan_id == 42
     assert loaded.show_dcp_only is False
+    assert loaded.show_app_header is False
+    assert loaded.show_identify_filters is False
+    assert loaded.show_tab_notices is False
+    assert loaded.compact_spacing is True
 
 
 def test_config_malformed_uses_defaults(tmp_path):

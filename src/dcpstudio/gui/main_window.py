@@ -12,15 +12,17 @@ shutdown sequence.
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QStatusBar,
     QTableWidget,
@@ -40,6 +42,7 @@ from ..services.capture import CaptureBuffer, FrameRouter
 from ..transport.base import InterfaceInfo
 from .controller import SessionController
 from .tabs import TabBuildersMixin
+from .tabs.common import NOTICE_PROPERTY
 from .workers import (
     CaptureBridge,
     DiscoveryWorker,
@@ -108,6 +111,51 @@ QCheckBox { spacing: 7px; }
 QStatusBar { background: #e9f0f8; color: #334155; border-top: 1px solid #d8e2ee; }
 QSplitter::handle { background: #e2eaf4; height: 5px; width: 5px; }
 """
+
+# Optional compact spacing (Edit menu) for small screens. These rules repeat
+# the selectors above with tighter paddings; a later rule wins for the
+# properties it sets, so colours and borders still come from STYLESHEET.
+COMPACT_STYLESHEET = """
+QGroupBox { margin-top: 9px; padding: 8px 8px 5px; }
+QTabBar::tab { padding: 6px 10px; }
+QPushButton { padding: 3px 8px; }
+QLineEdit, QSpinBox, QDoubleSpinBox { padding: 3px 6px; }
+QHeaderView::section { padding: 4px; }
+QPlainTextEdit { padding: 5px; }
+QTextBrowser { padding: 6px; }
+QSplitter::handle { height: 3px; width: 3px; }
+"""
+
+DEFAULT_WINDOW_SIZE = (1440, 940)
+MINIMUM_WINDOW_SIZE = (900, 600)
+
+
+def _initial_window_size() -> tuple[int, int]:
+    """Default window size, shrunk to fit the available screen."""
+    width, height = DEFAULT_WINDOW_SIZE
+    screen = QGuiApplication.primaryScreen()
+    if screen is not None:
+        available = screen.availableGeometry()
+        width = min(width, available.width() - 40)
+        height = min(height, available.height() - 60)
+    return (
+        max(MINIMUM_WINDOW_SIZE[0], width),
+        max(MINIMUM_WINDOW_SIZE[1], height),
+    )
+
+
+def _layout_action(
+    menu: QMenu, text: str, tooltip: str, checked: bool, slot
+) -> QAction:
+    """Checkable layout action; the check state already matches the config."""
+    action = QAction(text, menu)
+    action.setCheckable(True)
+    action.setChecked(checked)
+    action.setToolTip(tooltip)
+    action.setStatusTip(tooltip)
+    action.toggled.connect(slot)
+    menu.addAction(action)
+    return action
 
 
 def _delegate(attr: str) -> property:
@@ -185,13 +233,14 @@ class MainWindow(TabBuildersMixin, QMainWindow):
         self.setWindowTitle(
             f"{APP_NAME} {__version__} — PROFINET DCP"
         )
-        self.resize(1440, 940)
-        self.setMinimumSize(1100, 760)
+        self.setMinimumSize(*MINIMUM_WINDOW_SIZE)
+        self.resize(*_initial_window_size())
         self.setStyleSheet(STYLESHEET)
 
         self._build_ui()
         self._build_menu()
         self._build_statusbar()
+        self._apply_layout_options()
 
         self.capture_bridge.frame_received.connect(self._on_frame_ui)
         self.log_bridge.record_received.connect(self._on_log_record)
@@ -221,6 +270,7 @@ class MainWindow(TabBuildersMixin, QMainWindow):
 
         header = QFrame()
         header.setObjectName("header")
+        self.header = header
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(18, 14, 18, 14)
         title_box = QVBoxLayout()
@@ -277,6 +327,41 @@ class MainWindow(TabBuildersMixin, QMainWindow):
         file_menu.addAction(export_html)
         file_menu.addSeparator()
         file_menu.addAction(exit_action)
+
+        edit_menu = self.menuBar().addMenu("&Edit")
+        # Layout options for smaller screens; each is persisted in the config.
+        self.action_show_header = _layout_action(
+            edit_menu,
+            "Show application header",
+            "Hide the title banner to give the tabs more vertical space.",
+            self.config.show_app_header,
+            self._on_layout_option_changed,
+        )
+        self.action_show_identify_filters = _layout_action(
+            edit_menu,
+            "Show Identify filters",
+            "Show the Alias/vendor/device ID/role filter fields of the discovery "
+            "section. While hidden they are not applied: discovery sends "
+            "Identify-All.",
+            self.config.show_identify_filters,
+            self._on_layout_option_changed,
+        )
+        self.action_compact_spacing = _layout_action(
+            edit_menu,
+            "Compact spacing",
+            "Tighter paddings for group boxes, tabs, buttons and tables.",
+            self.config.compact_spacing,
+            self._on_layout_option_changed,
+        )
+        self.action_show_tab_notices = _layout_action(
+            edit_menu,
+            "Show tab notices",
+            "The scope and safety notice at the top of each tab. Static text only: "
+            "status, readiness and result lines stay visible.",
+            self.config.show_tab_notices,
+            self._on_layout_option_changed,
+        )
+
         help_menu = self.menuBar().addMenu("&Help")
         about = QAction("About DCP Studio", self)
         about.triggered.connect(self._show_about)
@@ -316,6 +401,41 @@ class MainWindow(TabBuildersMixin, QMainWindow):
     # -------------------------------------------------------------- interface
     def _service_log(self, event: str, message: str, detail: dict) -> None:
         self.event_log.info(event, message, detail)
+
+    # ---------------------------------------------------------------- layout
+    def _on_layout_option_changed(self, _checked: bool = False) -> None:
+        """Persist an Edit-menu layout toggle and apply it immediately."""
+        self.config = replace(
+            self.config,
+            show_app_header=self.action_show_header.isChecked(),
+            show_identify_filters=self.action_show_identify_filters.isChecked(),
+            show_tab_notices=self.action_show_tab_notices.isChecked(),
+            compact_spacing=self.action_compact_spacing.isChecked(),
+        )
+        self._apply_layout_options()
+        self.event_log.info(
+            "ui.layout",
+            "Layout options changed",
+            {
+                "show_app_header": self.config.show_app_header,
+                "show_identify_filters": self.config.show_identify_filters,
+                "show_tab_notices": self.config.show_tab_notices,
+                "compact_spacing": self.config.compact_spacing,
+            },
+        )
+
+    def _apply_layout_options(self) -> None:
+        """Apply the persisted layout preferences to the window."""
+        self.header.setVisible(self.config.show_app_header)
+        self.identify_filter_panel.setVisible(self.config.show_identify_filters)
+        # Static notices only; dynamic status/result labels are never hidden.
+        for label in self.findChildren(QLabel):
+            if label.property(NOTICE_PROPERTY):
+                label.setVisible(self.config.show_tab_notices)
+        self._refresh_discover_tooltip()
+        self.setStyleSheet(
+            STYLESHEET + (COMPACT_STYLESHEET if self.config.compact_spacing else "")
+        )
 
     # ------------------------------------------------------------- discovery
     def _discovery_running(self) -> bool:

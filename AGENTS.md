@@ -17,7 +17,7 @@ Read this before changing code. It records only facts verified in this tree.
 
 ```bash
 uv sync                                     # create .venv + dev group
-uv run pytest                               # full suite (offscreen Qt, 322 tests)
+uv run pytest                               # full suite (offscreen Qt, 329 tests)
 uv run pytest --cov=dcpstudio --cov-report=term-missing
 uv run ruff check src tests tools           # configured lint gate (clean)
 uv run mypy                                 # typed gate for the pure modules (clean)
@@ -203,6 +203,18 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
   `gui/tabs/write_flow.py` (`WriteFlowMixin`) for the Set/Reset flow,
   the confirmation hand-off and the reset post-check; put new tab
   widgets/handlers there, not in the shell.
+  The shell also owns the **Edit-menu layout options** only
+  (`_on_layout_option_changed` → `_apply_layout_options`: title header, hidden
+  Identify filters, hidden static tab notices, compact stylesheet; persisted as
+  `show_app_header`, `show_identify_filters`, `show_tab_notices`,
+  `compact_spacing` in `AppConfig`). A hidden filter
+  field must never shape a frame: `_start_discovery` checks
+  `config.show_identify_filters`, and `_refresh_discover_tooltip` states that
+  Identify-All is sent. A hidden notice must never be live feedback: only labels
+  created with `common.banner(..., notice=True)` are toggled; dynamic banners
+  (e.g. `monitor_notes_label`) and status/readiness labels are not marked and
+  stay visible. Keep the window minimum at 900 × 600 and the initial
+  size clamped to the screen (`_initial_window_size`).
   `tests/test_gui_orchestration.py` and `tests/test_gui_controller.py` target
   controller helpers directly; keep using them instead of adding logic to the
   window shell.

@@ -58,6 +58,14 @@ table](docs/pics/dcp_studio.png)
   confirmation, but it is still one unicast frame with no retry.
 - Provides structured logs, decoded block view, hex inspection, PCAP export and
   offline PCAP analysis.
+- **Fits smaller screens.** The window minimum is 900 × 600 px and the initial
+  size is clamped to the available screen. The **Edit** menu toggles the title
+  header, the advanced Identify filter fields, the static notice at the top of
+  each tab and a compact spacing set; all four are persisted. Group-box titles
+  always stay, and only *static* text can be hidden — status, readiness and
+  result lines are live feedback and are never affected. While the filter fields
+  are hidden they are not applied, so a hidden field never changes the frame:
+  the Discover tooltip states that Identify-All is sent.
 - Exports JSON and HTML reports with UTC timestamps, transaction identifiers,
   test outcomes, before/after observations, warnings, and known limitations.
   Report JSON uses schema version 2; `metadata` carries application and version.
@@ -228,7 +236,7 @@ or refusal, and `2` inconclusive/outcome unknown (no matching response).
 
 | Tab | Current behaviour |
 |---|---|
-| **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, Identify filters (NameOfStation, alias, vendor, device ID, role), Identify discovery, device table with client-side search/uncommissioned filter and sorting, duplicate NameOfStation/IP warnings, inventory CSV export and plan-CSV comparison |
+| **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, Identify filters (NameOfStation, alias, vendor, device ID, role) that the Edit menu can hide, Identify discovery, device table with client-side search/uncommissioned filter and sorting, duplicate NameOfStation/IP warnings, inventory CSV export and plan-CSV comparison |
 | **Monitor** | Repeated read-only Identify at a configurable interval with added/removed/changed-device detection (NameOfStation, IP, role, IDs, alias, options) |
 | **Device Details** | Identity summary (including DNS servers and DHCP control), per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets (identity, IP, network setup, name, ID/role, options, diagnostics) or an explicit **Custom selectors** list such as `0x03/0x0c`, and **Signal device (flash LED)** — one plain `05/03` frame |
 | **Configuration** | NameOfStation and IPv4 Set operations (`01/02`), the Full IP suite with DNS servers (`01/03`) and the DHCP on/off control (`03/ff`), all with temporary/permanent qualifier, validation, per-operation confirmation, fresh target revalidation and read-back verification |
@@ -236,6 +244,12 @@ or refusal, and `2` inconclusive/outcome unknown (no matching response).
 | **Test Runner** | Tests grouped by category (environment, offline parser/transactions/validation, live DCP, state-changing). Pick the device under test, then run the **device validation suite** (read-only checks plus one Set Name, one Set IP and one Reset) or the **full validation suite**; read-only presets and per-test selection are available too. The DUT selection plus the run button is the single authorization for the suite; every frame is sent once, revalidated and read back |
 | **Packet Capture** | Live/offline frame list, DCP filter, hex detail, PCAP export/import |
 | **Logs & Reports** | Structured event log, transaction log, session summary, JSON/HTML export |
+
+The **Edit** menu holds the layout options for smaller screens (title header,
+Identify filter fields, tab notices, compact spacing); they are saved in
+`config.json` and the group-box titles are always shown. A hidden notice is only
+cosmetic: the safety text is repeated at the point of action (confirmation
+dialogs) and in every exported report.
 
 ### Safety posture
 

@@ -150,7 +150,8 @@ class MonitorTabMixin:
         self.monitor_changes_label = QLabel("0 change(s) recorded.")
         changes_layout.addWidget(self.monitor_changes_label)
 
-        self.monitor_notes_label = banner("", "Warning")
+        # Filled in by a run: this is live feedback, not a static notice.
+        self.monitor_notes_label = banner("", "Warning", notice=False)
         self.monitor_notes_label.setVisible(False)
         changes_layout.addWidget(self.monitor_notes_label)
         layout.addWidget(changes_group, 1)

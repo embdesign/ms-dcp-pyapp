@@ -49,16 +49,28 @@ PACKET_COLUMNS = (
 MAX_PACKET_ROWS = 1500
 MAX_LOG_ROWS = 2500
 
+# Dynamic property marking a static tab notice (see :func:`banner`).
+NOTICE_PROPERTY = "dcp_notice"
+
 # Sentinel for the legacy FactoryReset (05/05), which carries no reset-mode
 # number. Kept as a string so it cannot collide with an integer mode value.
 LEGACY_RESET_CHOICE = "legacy"
 
 
-def banner(text: str, kind: str = "Warning") -> QLabel:
+def banner(text: str, kind: str = "Warning", *, notice: bool = True) -> QLabel:
+    """Static tab notice, styled as an info/warning/danger/ok banner.
+
+    ``notice=True`` marks the label as a fixed scope/safety notice so the Edit
+    menu can hide it (``config.show_tab_notices``). Pass ``notice=False`` for a
+    banner whose text is filled in by an action: that is live feedback and must
+    never be hidden by a layout option.
+    """
     label = QLabel(text)
     label.setObjectName(f"banner{kind}")
     label.setWordWrap(True)
     label.setTextFormat(Qt.TextFormat.RichText)
+    if notice:
+        label.setProperty(NOTICE_PROPERTY, True)
     return label
 
 

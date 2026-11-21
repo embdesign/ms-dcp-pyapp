@@ -195,6 +195,16 @@ def test_device_summary_reports_ip_block_info_bits():
     assert "address conflict indicated" in html
 
 
+def test_device_summary_shows_dns_and_dhcp_control():
+    html = device_summary_html(
+        _device(dns_servers=["192.0.2.53", "192.0.2.54"], dhcp_control=2)
+    )
+    assert "DNS servers" in html
+    assert "192.0.2.53, 192.0.2.54" in html
+    assert "DHCP control" in html
+    assert "Use DHCP for address resolution" in html
+
+
 def test_report_preview_counts_and_escapes():
     html = report_preview_html(
         interface_name="eth<0>",

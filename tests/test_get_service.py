@@ -21,6 +21,12 @@ def _service() -> tuple[MockTransport, GetService]:
     return transport, service
 
 
+def test_network_preset_reads_full_suite_and_dhcp():
+    preset = GET_PRESETS["network"]
+    assert (1, 3) in preset.selectors
+    assert (3, 255) in preset.selectors
+
+
 def test_get_identity_blocks_succeed():
     transport, service = _service()
     try:

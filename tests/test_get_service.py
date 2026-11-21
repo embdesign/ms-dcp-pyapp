@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from dcpstudio.codec import parse_frame
 from dcpstudio.mock import MockDeviceConfig, MockNetwork, MockTransport, default_mock_devices
-from dcpstudio.services.get import GET_PRESETS, GetConfig, GetService
+from dcpstudio.services.get import (
+    GET_PRESETS,
+    GetConfig,
+    GetService,
+    choose_selectors,
+    parse_selectors,
+)
 from dcpstudio.services.rate_limit import RequestRateLimiter
 
 DEVICE = default_mock_devices()[0]
@@ -25,6 +33,39 @@ def test_network_preset_reads_full_suite_and_dhcp():
     preset = GET_PRESETS["network"]
     assert (1, 3) in preset.selectors
     assert (3, 255) in preset.selectors
+
+
+def test_parse_selectors_accepts_hex_decimal_and_separators():
+    assert parse_selectors("0x03/0x0c") == ((3, 12),)
+    assert parse_selectors("2:5, 0x02/0x05; 0xff/0x01") == (
+        (2, 5),
+        (2, 5),
+        (255, 1),
+    )
+    assert parse_selectors(" 3 / 0xc \n") == ((3, 12),)
+
+
+def test_parse_selectors_refuses_empty_or_malformed_input():
+    for text in ("", "   ", ",", "0x100/1", "3", "3/12/1", "x/12"):
+        with pytest.raises(ValueError):
+            parse_selectors(text)
+
+
+def test_choose_selectors_prefers_explicit_blocks_and_labels_them():
+    choice = choose_selectors("identity", "0x03/0x0c, 0x02/0x05")
+    assert choice.selectors == ((3, 12), (2, 5))
+    assert choice.preset_key == ""
+    assert choice.label == "DHCP host name, Device options"
+
+    preset = choose_selectors("network", "")
+    assert preset.selectors == GET_PRESETS["network"].selectors
+    assert preset.preset_key == "network"
+    assert preset.label == GET_PRESETS["network"].label
+
+
+def test_choose_selectors_refuses_unknown_preset_without_explicit_blocks():
+    with pytest.raises(ValueError):
+        choose_selectors("", "")
 
 
 def test_get_identity_blocks_succeed():

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from ...html_render import esc
 from ...model import DeviceIdentity, DiscoveryResult, GetResult, WriteResult, iso_utc
-from ...services.get import GET_PRESETS, GetConfig, selector_name
+from ...services.get import GET_PRESETS, GetConfig, choose_selectors, selector_name
 from ...utils import hexdump, pretty_json
 from ..presentation import device_summary_html, get_result_html
 from ..workers import GetWorker, SignalWorker
@@ -102,6 +103,23 @@ class DeviceTabMixin:
         get_row.addWidget(self.get_blocks_button)
         get_row.addWidget(self.cancel_get_button)
         get_layout.addLayout(get_row)
+
+        custom_row = QHBoxLayout()
+        custom_label = QLabel("Custom selectors")
+        self.get_selector_edit = QLineEdit()
+        self.get_selector_edit.setPlaceholderText(
+            "Optional: explicit Option/Sub-option blocks, e.g. 0x03/0x0c, 0xff/0x01"
+        )
+        self.get_selector_edit.setClearButtonEnabled(True)
+        self.get_selector_edit.setToolTip(
+            "Read explicit DCP blocks instead of the preset above. Separate entries "
+            "with commas; decimal or 0x hex. Any Option/Sub-option is allowed and "
+            "unknown blocks are shown as hex. The request stays read-only and "
+            "unicast, and a rejected block is reported with its block error."
+        )
+        custom_row.addWidget(custom_label)
+        custom_row.addWidget(self.get_selector_edit, 1)
+        get_layout.addLayout(custom_row)
         self.get_result_label = QLabel("No Get request yet.")
         self.get_result_label.setWordWrap(True)
         self.get_result_label.setTextFormat(Qt.TextFormat.RichText)
@@ -164,6 +182,14 @@ class DeviceTabMixin:
                 "to finish or cancel it before starting Get.",
             )
             return
+        preset_key = self.get_preset_combo.currentData()
+        try:
+            choice = choose_selectors(
+                str(preset_key or ""), self.get_selector_edit.text()
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Get selection", str(exc))
+            return
         if (
             self.transport is None
             or self.get_service is None
@@ -173,16 +199,11 @@ class DeviceTabMixin:
             return
         if not self.transport.is_capturing and not self._start_capture():
             return
-        preset_key = self.get_preset_combo.currentData()
-        preset = GET_PRESETS.get(str(preset_key)) if preset_key else None
-        if preset is None:
-            QMessageBox.warning(self, "No Get preset", "Select a Get block preset.")
-            return
         target = self.selected_device
         cfg = GetConfig(
             timeout_s=self.timeout_spin.value(),
             vlan_id=self.vlan_spin.value() or None,
-            selectors=preset.selectors,
+            selectors=choice.selectors,
             min_request_interval_s=self.config.min_request_interval_s,
         )
         self.get_cancel = threading.Event()
@@ -199,7 +220,7 @@ class DeviceTabMixin:
         worker.finished.connect(self._on_get_thread_finished)
         self.get_worker = worker
         self.get_result_label.setText(
-            f"Reading <b>{esc(preset.label)}</b> from "
+            f"Reading <b>{esc(choice.label)}</b> from "
             f"<code>{esc(target.mac)}</code>…"
         )
         self.event_log.info(
@@ -207,8 +228,8 @@ class DeviceTabMixin:
             f"Read-only Get to {target.mac}",
             {
                 "target": target.mac,
-                "preset": preset.key,
-                "selectors": [selector_name(s) for s in preset.selectors],
+                "preset": choice.preset_key,
+                "selectors": [selector_name(s) for s in choice.selectors],
                 "timeout_s": cfg.timeout_s,
                 "vlan_id": cfg.vlan_id,
             },

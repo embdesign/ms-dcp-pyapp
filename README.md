@@ -72,12 +72,13 @@ changes.
 
 Within DCP itself the omissions are deliberate and recorded in the support
 matrix: Hello is decoded but never sent, the individual DHCP option codes
-(`03/12`…`03/61`) are not assigned (only the DHCP on/off control), and Control
-Start/Stop multi-block
+(`03/0c`…`03/61`, i.e. option codes 12…97) are not assigned (only the DHCP
+on/off control), and Control Start/Stop multi-block
 transactions (`05/01`/`05/02`) are not used. All six named reset modes are
 implemented; which data a given device erases stays vendor-specific. Get accepts arbitrary
-Option/SubOption selectors through the codec and `dcp-cli get --selector`; the
-GUI exposes presets only. Monitoring is user-started polling: it repeats the
+Option/SubOption selectors through the codec, `dcp-cli get --selector` and the
+**Custom selectors** field of the Device Details tab. Monitoring is user-started
+polling: it repeats the
 normal Identify request at a configured interval (minimum 1 s, still subject to
 the shared request limiter) and stops when the operator stops it or the cycle
 count is reached. It has no alerting, no history beyond the current run and no
@@ -229,7 +230,7 @@ or refusal, and `2` inconclusive/outcome unknown (no matching response).
 |---|---|
 | **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, Identify filters (NameOfStation, alias, vendor, device ID, role), Identify discovery, device table with client-side search/uncommissioned filter and sorting, duplicate NameOfStation/IP warnings, inventory CSV export and plan-CSV comparison |
 | **Monitor** | Repeated read-only Identify at a configurable interval with added/removed/changed-device detection (NameOfStation, IP, role, IDs, alias, options) |
-| **Device Details** | Identity summary (including DNS servers and DHCP control), per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets (identity, IP, network setup, name, ID/role, options, diagnostics) and **Signal device (flash LED)** — one plain `05/03` frame |
+| **Device Details** | Identity summary (including DNS servers and DHCP control), per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets (identity, IP, network setup, name, ID/role, options, diagnostics) or an explicit **Custom selectors** list such as `0x03/0x0c`, and **Signal device (flash LED)** — one plain `05/03` frame |
 | **Configuration** | NameOfStation and IPv4 Set operations (`01/02`), the Full IP suite with DNS servers (`01/03`) and the DHCP on/off control (`03/ff`), all with temporary/permanent qualifier, validation, per-operation confirmation, fresh target revalidation and read-back verification |
 | **Reset** | ResetToFactorySettings modes 1, 2, 3, 4, 8 and 9 with the documented wire qualifier, plus the legacy FactoryReset (`05/05`, full reset, no mode field); per-operation confirmation and an optional read-only post-check |
 | **Test Runner** | Tests grouped by category (environment, offline parser/transactions/validation, live DCP, state-changing). Pick the device under test, then run the **device validation suite** (read-only checks plus one Set Name, one Set IP and one Reset) or the **full validation suite**; read-only presets and per-test selection are available too. The DUT selection plus the run button is the single authorization for the suite; every frame is sent once, revalidated and read back |

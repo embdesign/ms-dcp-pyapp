@@ -7,6 +7,7 @@ matching response, and never retries.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -116,6 +117,73 @@ GET_PRESETS: dict[str, GetPreset] = {
 
 def selector_name(selector: tuple[int, int]) -> str:
     return SUBOPTION_NAMES.get(selector, f"0x{selector[0]:02x}/0x{selector[1]:02x}")
+
+
+_SELECTOR_SPLIT = re.compile(r"[/:]")
+_SELECTOR_LIST_SPLIT = re.compile(r"[,;\n]")
+
+
+def parse_selector(text: str) -> tuple[int, int]:
+    """Parse one ``OPTION/SUBOPTION`` selector such as ``0x03/0x12`` or ``2/5``."""
+    parts = _SELECTOR_SPLIT.split(text.strip())
+    if len(parts) != 2:
+        raise ValueError(
+            f"Invalid selector {text!r}; expected OPTION/SUBOPTION, for example 0x02/0x02"
+        )
+    try:
+        option, suboption = int(parts[0], 0), int(parts[1], 0)
+    except ValueError as exc:
+        raise ValueError(f"Invalid selector {text!r}: {exc}") from exc
+    if not (0 <= option <= 0xFF and 0 <= suboption <= 0xFF):
+        raise ValueError("Selector option and sub-option must be 0..255")
+    return option, suboption
+
+
+def parse_selectors(text: str) -> tuple[tuple[int, int], ...]:
+    """Parse a comma/semicolon separated selector list.
+
+    Raises :class:`ValueError` for empty input or any malformed entry, so a
+    caller never sends a partially understood request.
+    """
+    items = [part for part in _SELECTOR_LIST_SPLIT.split(text) if part.strip()]
+    if not items:
+        raise ValueError(
+            "No selector given; expected OPTION/SUBOPTION, for example 0x03/0x0c"
+        )
+    return tuple(parse_selector(part) for part in items)
+
+
+@dataclass(frozen=True, slots=True)
+class SelectorChoice:
+    """Resolved selectors for one Get request, with the label to show."""
+
+    selectors: tuple[tuple[int, int], ...]
+    label: str
+    preset_key: str
+
+
+def choose_selectors(preset_key: str, custom_text: str = "") -> SelectorChoice:
+    """Resolve a Get preset key and/or explicit selector text.
+
+    An explicit selector list wins over the preset. ``ValueError`` is raised for
+    an unknown preset, empty input or a malformed selector.
+    """
+    if custom_text.strip():
+        selectors = parse_selectors(custom_text)
+        return SelectorChoice(
+            selectors=selectors,
+            label=", ".join(selector_name(selector) for selector in selectors),
+            preset_key="",
+        )
+    preset = GET_PRESETS.get(preset_key)
+    if preset is None:
+        raise ValueError(
+            "Select a Get block preset, or enter at least one Option/Sub-option "
+            "selector such as 0x02/0x02."
+        )
+    return SelectorChoice(
+        selectors=preset.selectors, label=preset.label, preset_key=preset.key
+    )
 
 
 @dataclass(slots=True)

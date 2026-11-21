@@ -57,8 +57,9 @@ KNOWN_LIMITATIONS: tuple[str, ...] = (
     "address conflicts.",
     "Unknown or vendor-specific blocks are preserved for inspection but not interpreted.",
     "Device capability is not inferred from the manufacturer name.",
-    "No cyclic PROFINET IO, controller commissioning, firmware flashing, DHCP, or "
-    "PROFINET CM/DCE-RPC functionality is implemented.",
+    "No cyclic PROFINET IO, controller commissioning, firmware flashing, DHCP option "
+    "assignment (option codes 12 to 97), or PROFINET CM/DCE-RPC functionality is "
+    "implemented. DHCP control (03/ff) is read and can be set.",
     "Report timestamps come from the host clock; capture timestamps may come from the "
     "capture driver.",
     "This report is not a PROFINET conformance certificate.",

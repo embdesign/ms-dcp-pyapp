@@ -10,6 +10,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Custom Get selectors in the GUI.** The Device Details tab has a **Custom
+  selectors** field next to the preset combo, so any `Option/Sub-option` block
+  (`0x03/0x0c`, `0xff/0x01`, repeatable, comma separated) can be read from the
+  selected device. The preset remains the default; explicit entries win over it,
+  are validated before a request is prepared, and appear as a name or as raw hex
+  in the result and the event log. The parser and resolver (`parse_selector`,
+  `parse_selectors`, `choose_selectors`) live in `services/get.py` and are shared
+  with `dcp-cli get --selector`. DHCP sub-options now have display names
+  (`03/0c` host name … `03/ff` control).
 - **Multi-block Identify filters.** Besides NameOfStation, an Identify request
   can filter by Alias (`02/06`), vendor/type (`02/01`), device ID (`02/03`),
   device role (`02/04`) and MAC (`01/01`). Conditions are sent in the
@@ -63,6 +72,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Stale DHCP limitation in the report.** `KNOWN_LIMITATIONS` said DHCP was not
+  implemented; it now names DHCP *option* assignment (option codes 12…97) and
+  states that the DHCP control (`03/ff`) is read and can be set.
 - **Discovery tab shrinking.** The Identify section no longer clips its
   Discover button and summary when the window is small: its content sits in an
   internal scroll area (section 2 scrolls, the interface and device tables keep

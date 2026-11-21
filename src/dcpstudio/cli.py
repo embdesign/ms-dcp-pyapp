@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -68,7 +67,7 @@ from .pcap_io import PcapError, analyze_pcap
 from .reporting import ReportContext, summarize_statuses, write_html_report, write_json_report
 from .services.capture import FrameRouter
 from .services.discovery import DiscoveryConfig, DiscoveryService
-from .services.get import GET_PRESETS, GetConfig, GetService
+from .services.get import GET_PRESETS, GetConfig, GetService, parse_selector
 from .services.monitor import MonitorService
 from .services.signal import SignalService
 from .services.write import (
@@ -227,18 +226,10 @@ def _validate_common(args: argparse.Namespace, *, discovery: bool) -> None:
 
 
 def _parse_selector(text: str) -> tuple[int, int]:
-    parts = re.split(r"[/:]", text.strip())
-    if len(parts) != 2:
-        raise _CliError(
-            f"Invalid selector {text!r}; expected OPTION/SUBOPTION, for example 0x02/0x02"
-        )
     try:
-        option, suboption = int(parts[0], 0), int(parts[1], 0)
+        return parse_selector(text)
     except ValueError as exc:
-        raise _CliError(f"Invalid selector {text!r}: {exc}") from exc
-    if not (0 <= option <= 0xFF and 0 <= suboption <= 0xFF):
-        raise _CliError("Selector option and sub-option must be 0..255")
-    return option, suboption
+        raise _CliError(str(exc)) from exc
 
 
 def _app_config(args: argparse.Namespace, interface: InterfaceInfo) -> AppConfig:

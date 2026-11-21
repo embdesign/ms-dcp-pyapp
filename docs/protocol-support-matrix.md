@@ -53,9 +53,10 @@ Legend:
 | Set DHCP control | ✅ | ✅ | ✅ | ✅ | `03/ff`; 3-byte value; read-back Get |
 | ResetToFactorySettings | ✅ | ✅ | ✅ | ✅ | `05/06`; all modes 1/2/3/4/8/9; per-operation confirmation; post-check |
 
-Get accepts arbitrary `Option/SubOption` selectors through the codec and
-`dcp-cli get --selector OPTION/SUBOPTION` (repeatable); the GUI exposes named
-presets only. There is no arbitrary-Set editor: Set is limited to the
+Get accepts arbitrary `Option/SubOption` selectors through the codec,
+`dcp-cli get --selector OPTION/SUBOPTION` (repeatable) and the **Custom
+selectors** field of the Device Details tab; the preset combo stays the
+default. There is no arbitrary-Set editor: Set is limited to the
 sub-options listed above (NameOfStation, `01/02`, `01/03`, DHCP control) plus
 the Control reset/signal operations.
 

@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QGroupBox,
+    QMessageBox,
     QScrollArea,
     QTableWidget,
 )
@@ -174,6 +175,33 @@ def test_identify_discovery_section_scrolls_instead_of_clipping():
         window.resize(1440, 940)
         app.processEvents()
         assert area.verticalScrollBar().maximum() == 0
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_custom_get_selectors_are_validated_before_a_request(monkeypatch):
+    """The explicit-selector field is checked before any frame is prepared."""
+    app = _app()
+    window = MainWindow()
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        staticmethod(lambda parent, title, text, *args, **kwargs: warnings.append(text)),
+    )
+    try:
+        assert window.get_selector_edit.text() == ""
+        window.get_selector_edit.setText("0x100/1")
+        window._start_get()
+        assert warnings and "0..255" in warnings[0]
+        assert window.transport is None
+        # A valid list passes validation and stops at the missing target instead.
+        warnings.clear()
+        window.get_selector_edit.setText("0x03/0x0c, 0x02/0x05")
+        window._start_get()
+        assert warnings == ["Select one discovered device first."]
+        assert window.transport is None
     finally:
         window.close()
         app.processEvents()

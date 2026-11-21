@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from dcpstudio.codec import parse_frame
+from dcpstudio.codec import IdentifyFilter, parse_frame
 from dcpstudio.mock import MockDeviceConfig, MockNetwork, MockTransport
 from dcpstudio.services.discovery import DiscoveryConfig, DiscoveryService
 from dcpstudio.services.rate_limit import RequestRateLimiter
@@ -61,6 +61,64 @@ def test_mock_discovery_and_transactions():
     assert "transmitted" in outcomes
     assert outcomes.count("matching_response_received") == 3
     assert result.duplicate_responses == 0
+
+
+def test_identify_filter_matches_alias_role_and_mac():
+    first = MockDeviceConfig(
+        mac="02:00:00:00:00:31",
+        name="a",
+        alias="port-001.a",
+        vendor_id=0x002A,
+        device_id=0x0101,
+        role_flags=0x01,
+    )
+    second = MockDeviceConfig(
+        mac="02:00:00:00:00:32",
+        name="b",
+        alias="port-002.b",
+        vendor_id=0x002A,
+        device_id=0x0202,
+        role_flags=0x02,
+    )
+    transport = MockTransport(MockNetwork([first, second]))
+    transport.start_capture()
+    service = DiscoveryService(transport, limiter=RequestRateLimiter(0.01))
+    transport.set_frame_callback(
+        lambda raw, ts, direction: service.process_frame(raw, ts, direction)
+    )
+    try:
+        by_alias = service.discover(
+            DiscoveryConfig(
+                timeout_s=0.5, identify_filter=IdentifyFilter(alias="port-002.b")
+            )
+        )
+        by_role = service.discover(
+            DiscoveryConfig(
+                timeout_s=0.5, identify_filter=IdentifyFilter(device_role=0x01)
+            )
+        )
+        by_mac = service.discover(
+            DiscoveryConfig(
+                timeout_s=0.5,
+                identify_filter=IdentifyFilter(mac="02:00:00:00:00:32"),
+            )
+        )
+        by_vendor = service.discover(
+            DiscoveryConfig(
+                timeout_s=0.5,
+                identify_filter=IdentifyFilter(vendor_name="Mock Automation"),
+            )
+        )
+    finally:
+        transport.close()
+    assert [d.mac for d in by_alias.devices] == ["02:00:00:00:00:32"]
+    assert [d.mac for d in by_role.devices] == ["02:00:00:00:00:31"]
+    assert [d.mac for d in by_mac.devices] == ["02:00:00:00:00:32"]
+    assert [d.mac for d in by_vendor.devices] == [
+        "02:00:00:00:00:31",
+        "02:00:00:00:00:32",
+    ]
+    assert by_alias.identify_filter_text == "alias 'port-002.b'"
 
 
 def test_duplicate_response_is_merged():

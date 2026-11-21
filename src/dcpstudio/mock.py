@@ -195,15 +195,39 @@ class MockNetwork:
         if not selectors:
             return True
         for block in selectors:
-            if block.option == int(Option.ALL) and block.suboption == 0xFF:
+            option, suboption = block.option, block.suboption
+            value = block.value
+            if option == int(Option.ALL) and suboption == 0xFF:
                 return True
-            if (
-                block.option == int(Option.DEVICE_PROPERTIES)
-                and block.suboption == int(DeviceSubOption.NAME_OF_STATION)
-            ):
-                requested = block.value.rstrip(b"\x00").decode("ascii", errors="replace")
-                if requested != device.name:
+            if option == int(Option.DEVICE_PROPERTIES):
+                if suboption == int(DeviceSubOption.NAME_OF_STATION):
+                    requested = value.rstrip(b"\x00").decode("ascii", errors="replace")
+                    if requested != device.name:
+                        return False
+                elif suboption == int(DeviceSubOption.ALIAS):
+                    requested = value.rstrip(b"\x00").decode("ascii", errors="replace")
+                    if not device.alias or requested != device.alias:
+                        return False
+                elif suboption == int(DeviceSubOption.VENDOR):
+                    requested = value.rstrip(b"\x00").decode("ascii", errors="replace")
+                    if requested != device.vendor_name:
+                        return False
+                elif suboption == int(DeviceSubOption.DEVICE_ID):
+                    if len(value) < 4:
+                        return False
+                    vendor_id, device_id = struct.unpack_from("!HH", value, 0)
+                    if (vendor_id, device_id) != (device.vendor_id, device.device_id):
+                        return False
+                elif suboption == int(DeviceSubOption.DEVICE_ROLE):
+                    if not value or value[0] != device.role_flags:
+                        return False
+                else:
                     return False
+            elif option == int(Option.IP) and suboption == int(IpSubOption.MAC):
+                if value != _mac_bytes(device.mac):
+                    return False
+            else:
+                return False
         return True
 
     def build_identify_response(self, device: MockDeviceConfig, request) -> bytes:

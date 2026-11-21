@@ -6,6 +6,7 @@ import pytest
 
 from dcpstudio.codec import (
     DcpEncodingError,
+    IdentifyFilter,
     build_get_request,
     build_identify_request,
     encode_block,
@@ -183,6 +184,50 @@ def test_identify_name_filter_rejects_empty_and_invalid_names():
         build_identify_request("02:00:00:00:00:01", 1, name_of_station="")
     with pytest.raises(DcpEncodingError):
         build_identify_request("02:00:00:00:00:01", 1, name_of_station="Bad.Name")
+
+
+def test_multi_block_identify_filter_is_ordered_and_encoded():
+    filters = IdentifyFilter(
+        name_of_station="line-01.conveyor",
+        alias="port-001.line-01.conveyor",
+        vendor_name="Mock Automation",
+        vendor_id=0x002A,
+        device_id=0x0101,
+        device_role=0x01,
+        mac="02:00:00:00:00:11",
+    )
+    frame = parse_frame(
+        build_identify_request("08:00:27:0f:aa:bb", 7, filters=filters)
+    )
+    assert [(b.option, b.suboption) for b in frame.blocks] == [
+        (0x02, 0x02),
+        (0x02, 0x06),
+        (0x02, 0x01),
+        (0x02, 0x03),
+        (0x02, 0x04),
+        (0x01, 0x01),
+    ]
+    assert frame.blocks[3].value == b"\x00\x2a\x01\x01"
+    assert frame.blocks[4].value == b"\x01\x00"
+    assert frame.blocks[5].value == bytes.fromhex("020000000011")
+    assert frame.service_id == 0x05 and frame.service_type == 0x00
+    assert filters.summary.startswith("name 'line-01.conveyor'")
+
+
+def test_identify_filter_validation():
+    with pytest.raises(DcpEncodingError):
+        IdentifyFilter().encode()
+    with pytest.raises(DcpEncodingError):
+        IdentifyFilter(vendor_id=1).encode()
+    with pytest.raises(DcpEncodingError):
+        IdentifyFilter(device_role=256).encode()
+    with pytest.raises(DcpEncodingError):
+        build_identify_request(
+            "02:00:00:00:00:01",
+            1,
+            name_of_station="a",
+            filters=IdentifyFilter(name_of_station="b"),
+        )
 
 
 def test_identify_all_has_no_name_filter():

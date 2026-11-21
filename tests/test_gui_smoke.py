@@ -5,7 +5,12 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication, QScrollArea, QTableWidget  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QGroupBox,
+    QScrollArea,
+    QTableWidget,
+)
 
 from dcpstudio.gui.app import create_application  # noqa: E402
 from dcpstudio.gui.main_window import MainWindow  # noqa: E402
@@ -130,6 +135,45 @@ def test_reset_tab_scrolls_and_keeps_its_mode_table_readable():
         assert table is not None
         assert table.height() >= RESET_TABLE_MIN_HEIGHT
         assert page.verticalScrollBar().isVisible() is True
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_identify_discovery_section_scrolls_instead_of_clipping():
+    """The Identify filters stay reachable when the pane is short.
+
+    The nine filter rows made section 2 taller than the pane the splitter
+    grants it, which used to clip the Discover button and the summary text.
+    """
+    app = _app()
+    window = MainWindow()
+    try:
+        window.show()
+        window.tabs.setCurrentWidget(window.discovery_tab)
+        window.resize(1100, 760)
+        app.processEvents()
+        group = next(
+            box
+            for box in window.discovery_tab.findChildren(QGroupBox)
+            if box.title().startswith("2")
+        )
+        area = group.findChild(QScrollArea)
+        assert area is not None
+        assert area.widgetResizable() is True
+        assert area.horizontalScrollBar().maximum() == 0
+        # The pane is too short for the filters here, so it must scroll ...
+        assert area.verticalScrollBar().isVisible() is True
+        content = area.widget()
+        button = window.discover_button
+        assert content.isAncestorOf(button)
+        # ... and every control has to be inside the scrollable content box,
+        # so scrolling reaches it.
+        assert button.y() + button.height() <= content.height()
+        # At the default window size the section fits without a scrollbar.
+        window.resize(1440, 940)
+        app.processEvents()
+        assert area.verticalScrollBar().maximum() == 0
     finally:
         window.close()
         app.processEvents()

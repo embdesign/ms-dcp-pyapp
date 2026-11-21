@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -35,7 +37,7 @@ from ...inventory import (
     parse_plan_csv,
 )
 from ...model import DeviceIdentity, DiscoveryResult
-from ...services.discovery import DiscoveryConfig
+from ...services.discovery import DiscoveryConfig, IdentifyFilter
 from ...transport.interfaces import enumerate_interfaces
 from ...validation import validate_station_name
 from ..workers import DiscoveryWorker
@@ -100,10 +102,35 @@ class DiscoveryTabMixin:
         self.capture_state_label.setWordWrap(True)
         iface_layout.addWidget(self.capture_state_label)
 
+        self.permission_label = QLabel("Select an interface to evaluate capture readiness.")
+        self.permission_label.setObjectName("bannerInfo")
+        self.permission_label.setWordWrap(True)
+        self.permission_label.setTextFormat(Qt.TextFormat.RichText)
+        iface_layout.addWidget(self.permission_label)
+
         discovery_group = QGroupBox("2 · Identify discovery")
-        discovery_layout = QVBoxLayout(discovery_group)
+        discovery_group_layout = QVBoxLayout(discovery_group)
+        # The group holds many filter fields; without its own scroll area a
+        # short window squeezes it below its minimum height and the Discover
+        # button and status labels become unreachable.
+        discovery_scroll = QScrollArea()
+        discovery_scroll.setWidgetResizable(True)
+        discovery_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        discovery_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        discovery_scroll.setMinimumHeight(150)
+        discovery_scroll.setStyleSheet(
+            "QScrollArea{background:transparent;border:none;}"
+        )
+        discovery_content = QWidget()
+        discovery_layout = QVBoxLayout(discovery_content)
+        discovery_layout.setContentsMargins(0, 0, 0, 0)
+        discovery_layout.setSpacing(4)
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setVerticalSpacing(4)
+        form.setContentsMargins(0, 0, 0, 0)
         self.timeout_spin = QDoubleSpinBox()
         self.timeout_spin.setRange(0.5, 60.0)
         self.timeout_spin.setSingleStep(0.5)
@@ -127,10 +154,35 @@ class DiscoveryTabMixin:
             "Optional: send an Identify-filter request for this exact NameOfStation "
             "instead of Identify-All."
         )
+        self.alias_filter_edit = QLineEdit()
+        self.alias_filter_edit.setPlaceholderText("Exact AliasName (optional)")
+        self.alias_filter_edit.setClearButtonEnabled(True)
+        self.vendor_filter_edit = QLineEdit()
+        self.vendor_filter_edit.setPlaceholderText(
+            "Exact vendor / type of station (optional)"
+        )
+        self.vendor_filter_edit.setClearButtonEnabled(True)
+        self.vendor_id_filter_edit = QLineEdit()
+        self.vendor_id_filter_edit.setPlaceholderText("e.g. 0x002A (with device ID)")
+        self.device_id_filter_edit = QLineEdit()
+        self.device_id_filter_edit.setPlaceholderText("e.g. 0x0101 (with vendor ID)")
+        self.role_filter_spin = QSpinBox()
+        self.role_filter_spin.setRange(0, 255)
+        self.role_filter_spin.setSpecialValueText("any")
+        self.role_filter_spin.setValue(0)
+        self.role_filter_spin.setToolTip(
+            "Optional Device role filter byte (0x01 IO-Device, 0x02 IO-Controller, …); "
+            "0 means any role."
+        )
         form.addRow("Timeout", self.timeout_spin)
         form.addRow("ResponseDelayFactor", self.delay_spin)
         form.addRow("VLAN (802.1Q)", self.vlan_spin)
         form.addRow("NameOfStation filter", self.filter_edit)
+        form.addRow("Alias filter", self.alias_filter_edit)
+        form.addRow("Vendor filter", self.vendor_filter_edit)
+        form.addRow("Vendor ID filter", self.vendor_id_filter_edit)
+        form.addRow("Device ID filter", self.device_id_filter_edit)
+        form.addRow("Device role filter", self.role_filter_spin)
         discovery_layout.addLayout(form)
         rate = QLabel(
             "Pacing: at most one request per "
@@ -144,7 +196,8 @@ class DiscoveryTabMixin:
         self.discover_button = QPushButton("Discover")
         self.discover_button.setObjectName("primary")
         self.discover_button.setToolTip(
-            "Send one Identify request: Identify-All, or a NameOfStation filter when filled in."
+            "Send one Identify request: Identify-All, or an Identify filter when any "
+            "filter field is filled in."
         )
         self.discover_button.clicked.connect(lambda: self._start_discovery())
         self.cancel_discovery_button = QPushButton("Cancel")
@@ -159,12 +212,6 @@ class DiscoveryTabMixin:
         self.discovery_summary_label.setWordWrap(True)
         discovery_layout.addWidget(self.discovery_summary_label)
 
-        self.permission_label = QLabel("Select an interface to evaluate capture readiness.")
-        self.permission_label.setObjectName("bannerInfo")
-        self.permission_label.setWordWrap(True)
-        self.permission_label.setTextFormat(Qt.TextFormat.RichText)
-        discovery_layout.addWidget(self.permission_label)
-
         self.discovery_warning_label = QLabel("")
         self.discovery_warning_label.setObjectName("bannerWarning")
         self.discovery_warning_label.setWordWrap(True)
@@ -172,6 +219,8 @@ class DiscoveryTabMixin:
         self.discovery_warning_label.setVisible(False)
         discovery_layout.addWidget(self.discovery_warning_label)
         discovery_layout.addStretch(1)
+        discovery_scroll.setWidget(discovery_content)
+        discovery_group_layout.addWidget(discovery_scroll, 1)
 
         top_layout.addWidget(iface_group, 3)
         top_layout.addWidget(discovery_group, 2)
@@ -229,7 +278,8 @@ class DiscoveryTabMixin:
         devices_layout.addWidget(self.device_count_label)
         splitter.addWidget(top)
         splitter.addWidget(devices_group)
-        splitter.setSizes([430, 330])
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([640, 240])
         layout.addWidget(splitter, 1)
         return tab
 
@@ -403,6 +453,19 @@ class DiscoveryTabMixin:
         )
 
     # -------------------------------------------------------------- discovery
+    @staticmethod
+    def _filter_id(value: str, label: str) -> int | None:
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = int(text, 0)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be a value such as 0x002A") from exc
+        if not 0 <= parsed <= 0xFFFF:
+            raise ValueError(f"{label} must be 0..0xFFFF")
+        return parsed
+
     def _start_discovery(
         self, unicast_mac: str | None = None, *, apply_filter: bool = True
     ) -> None:
@@ -428,6 +491,7 @@ class DiscoveryTabMixin:
             QMessageBox.warning(self, "No interface", "Select an interface first.")
             return
         filter_name: str | None = None
+        identify_filter = None
         if unicast_mac is None and apply_filter:
             candidate = self.filter_edit.text().strip()
             if candidate:
@@ -438,6 +502,41 @@ class DiscoveryTabMixin:
                     )
                     return
                 filter_name = candidate
+            try:
+                vendor_id = self._filter_id(
+                    self.vendor_id_filter_edit.text(), "Vendor ID"
+                )
+                device_id = self._filter_id(
+                    self.device_id_filter_edit.text(), "Device ID"
+                )
+            except ValueError as exc:
+                QMessageBox.warning(self, "Invalid Identify filter", str(exc))
+                return
+            if (vendor_id is None) != (device_id is None):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Identify filter",
+                    "Enter both a Vendor ID and a Device ID, or neither.",
+                )
+                return
+            identify_filter = IdentifyFilter(
+                name_of_station=filter_name,
+                alias=self.alias_filter_edit.text().strip() or None,
+                vendor_name=self.vendor_filter_edit.text().strip() or None,
+                vendor_id=vendor_id,
+                device_id=device_id,
+                device_role=int(self.role_filter_spin.value()) or None,
+            )
+            if identify_filter.is_empty():
+                identify_filter = None
+            else:
+                try:
+                    identify_filter.encode()
+                except Exception as exc:
+                    QMessageBox.warning(
+                        self, "Invalid Identify filter", str(exc)
+                    )
+                    return
         if not self.transport.is_capturing and not self._start_capture():
             return
         cfg = DiscoveryConfig(
@@ -447,6 +546,7 @@ class DiscoveryTabMixin:
             unicast_mac=unicast_mac,
             min_request_interval_s=self.config.min_request_interval_s,
             identify_filter_name=filter_name,
+            identify_filter=identify_filter,
         )
         self.discovery_cancel = threading.Event()
         worker = DiscoveryWorker(self.controller, cfg, self.discovery_cancel, parent=self)
@@ -457,6 +557,10 @@ class DiscoveryTabMixin:
         self.discovery_worker = worker
         if unicast_mac:
             self.discovery_summary_label.setText(f"Unicast Identify to {unicast_mac}…")
+        elif identify_filter is not None:
+            self.discovery_summary_label.setText(
+                f"Discovering ({identify_filter.summary})…"
+            )
         elif filter_name:
             self.discovery_summary_label.setText(
                 f"Discovering NameOfStation {filter_name!r}…"
@@ -468,9 +572,9 @@ class DiscoveryTabMixin:
             f"unicast {unicast_mac}"
             if unicast_mac
             else (
-                f"NameOfStation filter {filter_name!r}"
-                if filter_name
-                else "multicast"
+                f"filters {identify_filter.summary}"
+                if identify_filter is not None
+                else (f"NameOfStation filter {filter_name!r}" if filter_name else "multicast")
             )
         )
         self.event_log.info(
@@ -483,6 +587,9 @@ class DiscoveryTabMixin:
                 "vlan_id": cfg.vlan_id,
                 "unicast_mac": unicast_mac,
                 "identify_filter_name": filter_name,
+                "identify_filter": (
+                    identify_filter.summary if identify_filter is not None else None
+                ),
             },
         )
         self._update_capture_controls()

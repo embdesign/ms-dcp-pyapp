@@ -25,7 +25,7 @@ Legend:
 | VLAN tag (802.1Q) | ✅ | ✅ | ✅ | ✅ | One tag; stacked tags warned |
 | Identify-All | ✅ | ✅ | ✅ | ✅ | One request per user action; timeout + ResponseDelayFactor |
 | Unicast Identify | ✅ | ✅ | ✅ | ✅ | Same PDU to selected MAC; device support varies |
-| Identify filter by NameOfStation | ✅ | ✅ | ✅ | ✅ | One `02/02` block with the exact ASCII name, no BlockInfo/Qualifier; optional GUI field; one request per action. Also the read-only revalidation fallback for a target that ignores unicast Identify (response MAC must still match) |
+| Identify filters (NameOfStation, alias, vendor, device ID, role, MAC) | ✅ | ✅ | ✅ | ✅ | Filter blocks `02/02`, `02/06`, `02/01`, `02/03`, `02/04`, `01/01` carry the value directly (no BlockInfo/Qualifier); every condition must match. The NameOfStation filter is also the read-only revalidation fallback for a target that ignores unicast Identify (response MAC must still match) |
 | Repeated Identify monitoring | ✅ | ✅ | ✅ | ✅ | `MonitorService` repeats one ordinary Identify per configured interval (≥ 1 s, still rate-limited) and diffs NameOfStation, IP, role, IDs, alias, instance and options; read-only and user-started |
 | Hello | — | ✅ | — | 🟡 | Decoded passively; not emitted |
 | Passive DCP capture | — | ✅ | — | ✅ | All four DCP FrameIDs |

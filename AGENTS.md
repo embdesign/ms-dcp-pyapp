@@ -17,7 +17,7 @@ Read this before changing code. It records only facts verified in this tree.
 
 ```bash
 uv sync                                     # create .venv + dev group
-uv run pytest                               # full suite (offscreen Qt, 316 tests)
+uv run pytest                               # full suite (offscreen Qt, 322 tests)
 uv run pytest --cov=dcpstudio --cov-report=term-missing
 uv run ruff check src tests tools           # configured lint gate (clean)
 uv run mypy                                 # typed gate for the pure modules (clean)

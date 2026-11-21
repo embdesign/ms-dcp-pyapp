@@ -227,7 +227,7 @@ or refusal, and `2` inconclusive/outcome unknown (no matching response).
 
 | Tab | Current behaviour |
 |---|---|
-| **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, optional NameOfStation filter, Identify discovery, device table with client-side search/uncommissioned filter and sorting, duplicate NameOfStation/IP warnings, inventory CSV export and plan-CSV comparison |
+| **Interfaces & Discovery** | Interface table, readiness/permission diagnosis, capture start/stop, timeout/ResponseDelayFactor/VLAN, Identify filters (NameOfStation, alias, vendor, device ID, role), Identify discovery, device table with client-side search/uncommissioned filter and sorting, duplicate NameOfStation/IP warnings, inventory CSV export and plan-CSV comparison |
 | **Monitor** | Repeated read-only Identify at a configurable interval with added/removed/changed-device detection (NameOfStation, IP, role, IDs, alias, options) |
 | **Device Details** | Identity summary (including DNS servers and DHCP control), per-block decode, raw hex, copy MAC/JSON, read-only unicast Identify, read-only **Get blocks** presets (identity, IP, network setup, name, ID/role, options, diagnostics) and **Signal device (flash LED)** — one plain `05/03` frame |
 | **Configuration** | NameOfStation and IPv4 Set operations (`01/02`), the Full IP suite with DNS servers (`01/03`) and the DHCP on/off control (`03/ff`), all with temporary/permanent qualifier, validation, per-operation confirmation, fresh target revalidation and read-back verification |

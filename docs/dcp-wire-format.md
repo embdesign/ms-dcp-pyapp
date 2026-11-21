@@ -50,7 +50,7 @@ Option (1) | SubOption (1) | BlockLength (2) | BlockInfo/Qualifier (2) | Value (
 
 | Message | 2-byte field |
 |---|---|
-| Identify request | none — the All selector has BlockLength 0; a NameOfStation filter (`02/02`) carries the ASCII value directly; a legacy All-selector 2-byte field is parsed as a qualifier |
+| Identify request | none — the All selector has BlockLength 0; filter blocks carry their value directly (NameOfStation `02/02`, Alias `02/06`, vendor `02/01`, device ID `02/03`, role `02/04`, MAC `01/01`); a legacy All-selector 2-byte field is parsed as a qualifier |
 | Identify response | BlockInfo |
 | Get request | none — selectors are just Option/SubOption pairs |
 | Get response | BlockInfo |
@@ -195,7 +195,30 @@ accept `ff ff 00 02 00 00` (BlockLength 2, qualifier 0), but many devices
 ignore that form; the encoding above matches the Nmap
 `multicast-profinet-discovery.nse` script and real device captures.
 
-### 4.1b Identify filter by NameOfStation
+### 4.1b Identify filters (NameOfStation, alias, vendor, device ID, role, MAC)
+
+An Identify-filter request carries filter blocks **without** BlockInfo or
+BlockQualifier: the value follows the 4-byte block header directly. IEC
+61158-6-10 defines the form as `[NameOfStationBlock] ^ [AliasNameBlock],
+IdentifyReqBlock * a`; p-net only evaluates the further blocks after a
+NameOfStation or Alias block, so this tool writes them in that order. A device
+answers only when **every** condition matches.
+
+| Block | Value |
+|---|---|
+| `02/02` NameOfStation | exact ASCII name, 1–240 bytes |
+| `02/06` Alias | exact ASCII alias (`port-xyz` + `.` + station name) |
+| `02/01` vendor / type of station | exact ASCII string |
+| `02/03` device ID | vendor ID (2) + device ID (2) |
+| `02/04` device role | role byte + reserved `0x00` |
+| `01/01` MAC | 6 bytes |
+
+Example with a name filter and a vendor filter:
+
+```
+02 02 00 09  6c 69 6e 65 2d 30 31 00     NameOfStation "line-01" + padding
+02 01 00 06  4d 6f 63 6b 00              vendor "Mock" + padding
+```
 
 Selects one exact station name. The filter block is `02/02` with the ASCII name
 as its value and **no** BlockInfo/BlockQualifier. Matching is exact and
@@ -219,7 +242,6 @@ Full hex (44 bytes):
 
 Only devices advertising exactly that NameOfStation reply. This is p-net's
 `IdentifyFilter` form; the All selector is not combined with a filter.
-
 ### 4.2 Get request (three selectors)
 
 ```

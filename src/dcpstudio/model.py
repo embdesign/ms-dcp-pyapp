@@ -462,6 +462,7 @@ class DiscoveryResult:
     cancelled: bool = False
     error: str | None = None
     identify_filter_name: str | None = None
+    identify_filter_text: str = ""
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -503,6 +504,7 @@ class DiscoveryResult:
             "response_delay_factor": self.response_delay_factor,
             "vlan_id": self.vlan_id,
             "identify_filter_name": self.identify_filter_name,
+            "identify_filter_text": self.identify_filter_text,
             "outcome": self.outcome,
             "request_count": self.request_count,
             "duplicate_responses": self.duplicate_responses,

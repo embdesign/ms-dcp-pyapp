@@ -155,6 +155,29 @@ def test_set_name_stops_when_target_does_not_answer_identify(capsys):
     assert output["transmitted"] is False
 
 
+def test_discover_identify_filter_by_device_id(capsys):
+    code = cli.main(
+        [
+            "discover",
+            *FAST,
+            "--vendor-id",
+            "0x002A",
+            "--device-id",
+            "0x0101",
+            "--json",
+        ]
+    )
+    output = _json(capsys)
+    assert code == cli.EXIT_OK
+    assert [device["mac"] for device in output["devices"]] == [DEVICE_MAC]
+    assert output["identify_filter_text"] == "device ID 0x002a/0x0101"
+
+
+def test_discover_rejects_half_a_device_id_filter(capsys):
+    code = cli.main(["discover", *FAST, "--vendor-id", "0x002A", "--json"])
+    assert code == cli.EXIT_FAILED
+
+
 def test_set_name_guarded_demo_is_read_back(capsys):
     code = cli.main(
         [

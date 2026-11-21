@@ -8,7 +8,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from ..codec import build_identify_request, extract_device_identity, new_xid, parse_frame
+from ..codec import (
+    IdentifyFilter,
+    build_identify_request,
+    extract_device_identity,
+    new_xid,
+    parse_frame,
+)
 from ..constants import (
     DCP_MULTICAST_MAC,
     DEFAULT_MIN_REQUEST_INTERVAL_S,
@@ -47,6 +53,7 @@ class DiscoveryConfig:
     unicast_mac: str | None = None
     min_request_interval_s: float = DEFAULT_MIN_REQUEST_INTERVAL_S
     identify_filter_name: str | None = None
+    identify_filter: IdentifyFilter | None = None
 
 
 @dataclass(slots=True)
@@ -55,6 +62,42 @@ class _Pending(PendingRequest):
 
     devices: dict[tuple[str, str], DeviceIdentity] = field(default_factory=dict)
     late_responses: int = 0
+
+
+def _filter_summary(cfg: DiscoveryConfig) -> str:
+    """Operator text for the Identify filter actually sent."""
+    if cfg.identify_filter is not None and not cfg.identify_filter.is_empty():
+        return cfg.identify_filter.summary
+    if cfg.identify_filter_name:
+        return f"name {cfg.identify_filter_name!r}"
+    return ""
+
+
+def _is_name_only_filter(cfg: DiscoveryConfig) -> bool:
+    if not cfg.identify_filter_name:
+        return False
+    filt = cfg.identify_filter
+    return filt is None or (
+        filt.name_of_station == cfg.identify_filter_name
+        and not filt.alias
+        and not filt.vendor_name
+        and filt.vendor_id is None
+        and filt.device_id is None
+        and filt.device_role is None
+        and not filt.mac
+    )
+
+
+def _filter_detail(cfg: DiscoveryConfig) -> str:
+    """Transaction text: keep the familiar NameOfStation wording when it is the
+    only condition, otherwise list every applied filter."""
+    if _is_name_only_filter(cfg):
+        return f"NameOfStation filter {cfg.identify_filter_name!r}"
+    if cfg.identify_filter is not None and not cfg.identify_filter.is_empty():
+        return f"filter {cfg.identify_filter.summary}"
+    if cfg.identify_filter_name:
+        return f"NameOfStation filter {cfg.identify_filter_name!r}"
+    return ""
 
 
 class DiscoveryService:
@@ -222,6 +265,8 @@ class DiscoveryService:
         progress: Callable[[str], None] | None = None,
     ) -> DiscoveryResult:
         cfg = config or DiscoveryConfig()
+        filter_text = _filter_summary(cfg)
+        filter_detail = _filter_detail(cfg)
         cancel_event = cancel_event or threading.Event()
         interface = self.transport.interface
         started = utc_now()
@@ -249,6 +294,8 @@ class DiscoveryService:
                         else "must not be empty"
                     )
                 )
+        if cfg.identify_filter is not None and cfg.identify_filter.is_empty():
+            raise TransportError("An Identify filter must contain at least one condition")
 
         if progress:
             progress(f"Waiting for request pacing ({self.limiter.remaining_s():.1f} s)…")
@@ -274,6 +321,7 @@ class DiscoveryService:
                 response_delay_factor=cfg.response_delay_factor,
                 vlan_id=cfg.vlan_id,
                 name_of_station=cfg.identify_filter_name,
+                filters=cfg.identify_filter,
             )
             request_hex = request.hex()
         except Exception as exc:
@@ -323,8 +371,8 @@ class DiscoveryService:
                 detail=(
                     f"Identify {'unicast to ' + cfg.unicast_mac if cfg.unicast_mac else 'multicast'}"
                     + (
-                        f", NameOfStation filter {cfg.identify_filter_name!r}"
-                        if cfg.identify_filter_name
+                        f", {filter_detail}"
+                        if filter_detail
                         else ""
                     )
                     + f"; timeout {cfg.timeout_s:.1f} s, response delay factor "
@@ -373,10 +421,17 @@ class DiscoveryService:
                 "on the segment; check interface, VLAN, switch multicast handling, privileges, "
                 "and timeout/ResponseDelayFactor."
             )
-            if cfg.identify_filter_name:
+            if _is_name_only_filter(cfg):
                 warnings.append(
                     "A NameOfStation filter was applied; only devices advertising exactly "
                     f"{cfg.identify_filter_name!r} respond. The match is exact, including case."
+                )
+            elif filter_text:
+                warnings.append(
+                    "An Identify filter was applied ("
+                    + filter_text
+                    + "); only devices matching every condition respond. "
+                    "Name and alias matching is exact, including case."
                 )
             transactions.append(
                 TransactionRecord(
@@ -426,6 +481,7 @@ class DiscoveryService:
             late_responses=late,
             cancelled=cancelled,
             identify_filter_name=cfg.identify_filter_name,
+            identify_filter_text=filter_text,
             warnings=warnings,
         )
         self._log(

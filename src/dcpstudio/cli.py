@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from . import APP_NAME, __version__
-from .codec import parse_mac
+from .codec import IdentifyFilter, parse_mac
 from .config import AppConfig
 from .constants import (
     DEFAULT_MIN_REQUEST_INTERVAL_S,
@@ -168,6 +168,44 @@ def _validated_mac(value: str, *, unicast: bool = True) -> str:
                 "batch targets are not supported."
             )
     return value.strip()
+
+
+def _hex_id_arg(value: str | None, label: str) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value, 0)
+    except ValueError as exc:
+        raise _CliError(f"{label} must be a value such as 0x002A") from exc
+    if not 0 <= parsed <= 0xFFFF:
+        raise _CliError(f"{label} must be 0..0xFFFF")
+    return parsed
+
+
+def _identify_filter_from_args(args: argparse.Namespace) -> IdentifyFilter | None:
+    vendor_id = _hex_id_arg(getattr(args, "vendor_id", None), "--vendor-id")
+    device_id = _hex_id_arg(getattr(args, "device_id", None), "--device-id")
+    if (vendor_id is None) != (device_id is None):
+        raise _CliError("--vendor-id and --device-id must be used together")
+    role = getattr(args, "role", None)
+    if role is not None and not 0 <= int(role) <= 0xFF:
+        raise _CliError("--role must be 0..255")
+    identify_filter = IdentifyFilter(
+        name_of_station=getattr(args, "name", None) or None,
+        alias=getattr(args, "alias", None) or None,
+        vendor_name=getattr(args, "vendor", None) or None,
+        vendor_id=vendor_id,
+        device_id=device_id,
+        device_role=int(role) if role is not None else None,
+        mac=getattr(args, "filter_mac", None) or None,
+    )
+    if identify_filter.is_empty():
+        return None
+    try:
+        identify_filter.encode()
+    except Exception as exc:
+        raise _CliError(f"Invalid Identify filter: {exc}") from exc
+    return identify_filter
 
 
 def _validate_common(args: argparse.Namespace, *, discovery: bool) -> None:
@@ -321,7 +359,9 @@ def _print_discovery(result: DiscoveryResult) -> None:
         f"Timeout {result.timeout_s:.1f} s, ResponseDelayFactor "
         f"{result.response_delay_factor}, duration {result.duration_ms:.0f} ms"
     )
-    if result.identify_filter_name is not None:
+    if result.identify_filter_text:
+        print(f"Identify filter: {result.identify_filter_text}")
+    elif result.identify_filter_name is not None:
         print(f"NameOfStation filter: {result.identify_filter_name!r}")
     if result.error:
         print(f"Error: {result.error}")
@@ -527,6 +567,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         report = validate_station_name(args.name)
         if not report.ok:
             raise _CliError(f"Invalid Identify NameOfStation filter: {report.summary()}")
+    identify_filter = _identify_filter_from_args(args)
     unicast = _validated_mac(args.unicast) if args.unicast else None
     interface = _resolve_interface(args.interface)
     with _Session(interface, min_interval_s=args.min_interval) as session:
@@ -538,6 +579,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
                 unicast_mac=unicast,
                 min_request_interval_s=args.min_interval,
                 identify_filter_name=args.name,
+                identify_filter=identify_filter,
             ),
             progress=_progress(args),
         )
@@ -557,6 +599,7 @@ def _cmd_inventory(args: argparse.Namespace) -> int:
         report = validate_station_name(args.name)
         if not report.ok:
             raise _CliError(f"Invalid Identify NameOfStation filter: {report.summary()}")
+    identify_filter = _identify_filter_from_args(args)
     interface = _resolve_interface(args.interface)
     with _Session(interface, min_interval_s=args.min_interval) as session:
         result = session.discovery.discover(
@@ -566,6 +609,7 @@ def _cmd_inventory(args: argparse.Namespace) -> int:
                 vlan_id=args.vlan,
                 min_request_interval_s=args.min_interval,
                 identify_filter_name=args.name,
+                identify_filter=identify_filter,
             ),
             progress=_progress(args),
         )
@@ -1171,6 +1215,32 @@ def _add_interface_arguments(
         )
 
 
+def _add_identify_filter_arguments(parser: argparse.ArgumentParser) -> None:
+    """Extra Identify filter blocks (IEC 61158-6-10 IdentifyFilter-ReqPDU)."""
+    parser.add_argument("--alias", metavar="ALIAS", help="Filter by exact AliasName")
+    parser.add_argument(
+        "--vendor",
+        metavar="TEXT",
+        help="Filter by the exact vendor / type-of-station string",
+    )
+    parser.add_argument(
+        "--vendor-id",
+        metavar="HEX",
+        help="Vendor ID filter (use together with --device-id)",
+    )
+    parser.add_argument(
+        "--device-id",
+        metavar="HEX",
+        help="Device ID filter (use together with --vendor-id)",
+    )
+    parser.add_argument(
+        "--role", type=int, metavar="0..255", help="Device role filter byte"
+    )
+    parser.add_argument(
+        "--filter-mac", metavar="MAC", help="Filter by the device MAC address"
+    )
+
+
 def _add_guard_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--confirm",
@@ -1229,6 +1299,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="Filter by exact NameOfStation (case-sensitive; one 02/02 block)",
     )
+    _add_identify_filter_arguments(discover)
     discover.set_defaults(handler=_cmd_discover)
 
     inventory = subparsers.add_parser(
@@ -1244,6 +1315,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="Filter by exact NameOfStation (case-sensitive; one 02/02 block)",
     )
+    _add_identify_filter_arguments(inventory)
     inventory.add_argument(
         "--csv",
         metavar="PATH",

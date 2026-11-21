@@ -66,6 +66,11 @@ Key verified statements:
   forms are tolerated when parsing.
 - Identify response MAC is the Ethernet source; p-net omits an IP/MAC block in
   Identify responses.
+- Identify-filter requests: `pf_dcp_identify_req` treats the request as a filter
+  only after a NameOfStation or Alias block (it sets `filter = true` there) and
+  then compares every following block with `memcmp`/length equality; the
+  DeviceRole comparison uses the 2-byte value (role + reserved). Non-name
+  filters are therefore sent after a name or alias block.
 - Response delay = `((mac[4] * 256 + mac[5]) % factor) * 10 ms`, factor 1…6400.
 
 ### Wireshark `pn_dcp` dissector

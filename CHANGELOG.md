@@ -10,6 +10,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Multi-block Identify filters.** Besides NameOfStation, an Identify request
+  can filter by Alias (`02/06`), vendor/type (`02/01`), device ID (`02/03`),
+  device role (`02/04`) and MAC (`01/01`). Conditions are sent in the
+  IEC/p-net order (name, alias, then the rest) and every one must match. The
+  Discovery tab gained the fields, `dcp-cli discover`/`inventory` gained
+  `--alias`, `--vendor`, `--vendor-id`/`--device-id`, `--role` and
+  `--filter-mac`.
 - **DNS and DHCP state in the read-only views.** Device Details, the device JSON
   and the HTML report now show the DNS servers of an `01/03` block and the DHCP
   control of an `03/ff` block. A new `network` Get preset (`dcp-cli get
@@ -56,6 +63,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Discovery tab shrinking.** The Identify section no longer clips its
+  Discover button and summary when the window is small: its content sits in an
+  internal scroll area (section 2 scrolls, the interface and device tables keep
+  their size), the capture-permission text moved into the interface section, and
+  the splitter can no longer collapse a pane. At the default window size the
+  section fits without a scrollbar.
 - **Wire-conformance guards found by the specification audit (2026-11-21).**
   `build_get_request` now rejects multicast/broadcast destinations (Get is a
   unicast transaction), and `build_identify_request` accepts only the DCP

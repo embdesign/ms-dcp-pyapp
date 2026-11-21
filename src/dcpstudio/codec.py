@@ -16,6 +16,7 @@ import ipaddress
 import secrets
 import struct
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from .constants import (
@@ -237,6 +238,129 @@ def _encode_identify_name_filter(name_of_station: str) -> bytes:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class IdentifyFilter:
+    """Multi-block DCP Identify filter.
+
+    IEC 61158-6-10 §4.3.1.4 defines ``IdentifyFilter-ReqPDU`` as
+    ``[NameOfStationBlock] ^ [AliasNameBlock], IdentifyReqBlock * a``. p-net
+    evaluates the following blocks only after a NameOfStation or Alias block,
+    so the encoder writes the conditions in that order. A device answers only
+    when **every** condition matches.
+    """
+
+    name_of_station: str | None = None
+    alias: str | None = None
+    vendor_name: str | None = None
+    vendor_id: int | None = None
+    device_id: int | None = None
+    device_role: int | None = None
+    mac: str | None = None
+
+    def is_empty(self) -> bool:
+        return not (
+            self.name_of_station
+            or self.alias
+            or self.vendor_name
+            or self.vendor_id is not None
+            or self.device_id is not None
+            or self.device_role is not None
+            or self.mac
+        )
+
+    @property
+    def summary(self) -> str:
+        parts: list[str] = []
+        if self.name_of_station:
+            parts.append(f"name {self.name_of_station!r}")
+        if self.alias:
+            parts.append(f"alias {self.alias!r}")
+        if self.vendor_name:
+            parts.append(f"vendor {self.vendor_name!r}")
+        if self.vendor_id is not None or self.device_id is not None:
+            parts.append(
+                f"device ID 0x{(self.vendor_id or 0):04x}/0x{(self.device_id or 0):04x}"
+            )
+        if self.device_role is not None:
+            parts.append(f"role 0x{self.device_role:02x}")
+        if self.mac:
+            parts.append(f"MAC {self.mac.lower()}")
+        return ", ".join(parts)
+
+    def encode(self) -> bytes:
+        blocks: list[bytes] = []
+        if self.name_of_station is not None:
+            blocks.append(_encode_identify_name_filter(self.name_of_station))
+        if self.alias is not None:
+            blocks.append(
+                _encode_text_filter(
+                    int(Option.DEVICE_PROPERTIES),
+                    int(DeviceSubOption.ALIAS),
+                    self.alias,
+                    "AliasName",
+                )
+            )
+        if self.vendor_name is not None:
+            blocks.append(
+                _encode_text_filter(
+                    int(Option.DEVICE_PROPERTIES),
+                    int(DeviceSubOption.VENDOR),
+                    self.vendor_name,
+                    "vendor name",
+                )
+            )
+        if (self.vendor_id is None) != (self.device_id is None):
+            raise DcpEncodingError(
+                "A Device ID filter requires both vendor_id and device_id"
+            )
+        if self.vendor_id is not None and self.device_id is not None:
+            for value, label in ((self.vendor_id, "vendor_id"), (self.device_id, "device_id")):
+                if not 0 <= int(value) <= 0xFFFF:
+                    raise DcpEncodingError(f"Identify filter {label} must be 0..0xFFFF")
+            blocks.append(
+                encode_block(
+                    int(Option.DEVICE_PROPERTIES),
+                    int(DeviceSubOption.DEVICE_ID),
+                    value=struct.pack("!HH", int(self.vendor_id), int(self.device_id)),
+                )
+            )
+        if self.device_role is not None:
+            if not 0 <= int(self.device_role) <= 0xFF:
+                raise DcpEncodingError("Identify filter device_role must be 0..0xFF")
+            blocks.append(
+                encode_block(
+                    int(Option.DEVICE_PROPERTIES),
+                    int(DeviceSubOption.DEVICE_ROLE),
+                    value=bytes([int(self.device_role), 0x00]),
+                )
+            )
+        if self.mac:
+            blocks.append(
+                encode_block(
+                    int(Option.IP),
+                    int(IpSubOption.MAC),
+                    value=parse_mac(self.mac),
+                )
+            )
+        if not blocks:
+            raise DcpEncodingError("An Identify filter must contain at least one condition")
+        return b"".join(blocks)
+
+
+def _encode_text_filter(
+    option: int, suboption: int, value: str, label: str
+) -> bytes:
+    if not value:
+        raise DcpEncodingError(f"Identify filter {label} must not be empty")
+    try:
+        raw = value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise DcpEncodingError(f"Identify filter {label} must be ASCII") from exc
+    if len(raw) > 240:
+        raise DcpEncodingError(f"Identify filter {label} exceeds 240 characters")
+    return encode_block(option, suboption, value=raw)
+
+
 def build_identify_request(
     src_mac: str,
     xid: int,
@@ -246,6 +370,7 @@ def build_identify_request(
     vlan_id: int | None = None,
     vlan_priority: int = 0,
     name_of_station: str | None = None,
+    filters: IdentifyFilter | None = None,
 ) -> bytes:
     """Build a DCP Identify request, either Identify-All or a name filter.
 
@@ -275,10 +400,23 @@ def build_identify_request(
             "An Identify request is sent to the DCP multicast MAC "
             f"{DCP_MULTICAST_MAC} or to one unicast device MAC"
         )
+    active_filters = filters or IdentifyFilter()
+    if name_of_station is not None:
+        if not name_of_station:
+            raise DcpEncodingError(
+                "An Identify NameOfStation filter must not be empty; use Identify-All "
+                "to discover every device"
+            )
+        if (
+            active_filters.name_of_station is not None
+            and active_filters.name_of_station != name_of_station
+        ):
+            raise DcpEncodingError("Conflicting NameOfStation Identify filters")
+        active_filters = replace(active_filters, name_of_station=name_of_station)
     payload = (
         encode_block(int(Option.ALL), int(AllSubOption.ALL))
-        if name_of_station is None
-        else _encode_identify_name_filter(name_of_station)
+        if active_filters.is_empty()
+        else active_filters.encode()
     )
     return (
         _ether_header(

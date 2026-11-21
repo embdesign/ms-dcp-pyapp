@@ -167,9 +167,11 @@ uv run python tools/make_fixtures.py        # regenerate tests/fixtures/*
 
 - Do not commit without operator authorization; check `git status` and make
   backups before bulk edits.
-- `dist/` predates the 2026-11-18/19 refactors; run `uv build` after any source
-  change before shipping. The wheel must contain `cli.py`, `session.py` and both
-  entry points.
+- `dist/` holds the 0.1.2 artifacts (rebuilt 2026-11-21); run `uv build` after
+  any source change before shipping. The wheel must contain `cli.py`,
+  `session.py` and both entry points. The version is read from the installed
+  distribution metadata, so `pyproject.toml` + `uv sync` is the only place to
+  bump it (`tests/test_version.py` asserts the two agree).
 - Windows/Npcap code paths cannot be executed on this Linux host; only the
   monkeypatched unit tests cover them.
 - Live read-only validation is possible without sudo on a dedicated lab NIC: a

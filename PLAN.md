@@ -2,7 +2,7 @@
 
 Status: **Implemented, tested and consolidated** — capability phases 1–4 and
 architecture Programme phases 0–7 are complete (2026-11-19)
-Application: `dcpstudio` 0.1.1
+Application: `dcpstudio` 0.1.2
 Scope of this build: **PROFINET DCP discovery, passive decoding, Get,
 LED Signal, per-operation-confirmed NameOfStation/IP Set, Full IP suite (`01/03`)
 and DHCP control (`03/ff`) Set, verified

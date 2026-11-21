@@ -212,7 +212,7 @@ Do not implement a destructive operation until its wire encoding and semantics a
 
 10. Implemented in the delivered build (beyond this brief)
 
-The delivered `dcpstudio` 0.1.1 build also includes the following capabilities.
+The delivered `dcpstudio` 0.1.2 build also includes the following capabilities.
 They are verified against the references in `docs/references.md`, recorded in
 `docs/protocol-support-matrix.md`, and none of them weakens the safety model
 above.

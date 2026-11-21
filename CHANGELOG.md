@@ -8,6 +8,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.2] - 2026-11-21
+
 ### Added
 
 - **Small-screen layout controls.** The window minimum is now 900 × 600 px (was
